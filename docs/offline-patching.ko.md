@@ -19,7 +19,7 @@
 | 받는 PC(연결된 구역)가 같은 릴리스·아키텍처 환경이다 | 같은 OS의 VM, 컨테이너(`--platform`로 아키텍처 지정), 대상 서버의 스냅샷 복원본 | 의존성 계산이 대상과 같아야 한다 |
 | 현재 설치된 PHP 패키지와 모듈 스트림을 기록했다 | 5~8절 각 OS의 "대상 서버에서 먼저 할 일" | 어떤 패키지를 받을지, 모듈 스트림을 바꾸지 않을지 판단 |
 | 의존성 닫힘(closure)을 계산했다 | 각 절의 `--print-uris`, `dnf download --resolve`, `apk fetch -R`, `zypper --download-only` | 빠진 의존성이 있으면 오프라인에서 해결할 수 없다 |
-| 여유 디스크 공간 | `df -h /var /tmp`, 이전 문서에서 본 패키지 묶음 크기(검증 환경에서 23~47 MB) 이상 + 여유 | 설치 중 공간 부족은 반쯤 설치된 상태를 만든다 |
+| 여유 디스크 공간 | `df -h /var /tmp` | 받은 패키지 묶음 크기(검증 환경에서 8~47 MB)의 몇 배 + 여유. 설치 중 공간 부족은 반쯤 설치된 상태를 만든다 |
 | 백업 | `/etc/php`, `/etc/php-fpm.d`, `/etc/httpd`, `/etc/apache2`, `/etc/nginx`, 애플리케이션 설정, VM 스냅샷 | 설정 복원용. 패키지 롤백은 취약 버전 복귀이므로 권장하지 않음 |
 | 작업 창과 롤링 계획 | 무중단이면 LB에서 노드를 하나씩 분리 | 재시작 순간의 서비스 단절 최소화 |
 | 패키지 고정(hold) 점검 | `apt-mark showhold`, `dnf versionlock list`(해당 시), `zypper locks` | 고정된 패키지는 설치가 막히거나 이전 버전으로 남는다 |
@@ -47,7 +47,7 @@
 | 대상 | 검증 이미지 | 어디까지 |
 |---|---|---|
 | Debian 12 | debian:12 (aarch64) | 목록 생성(`--print-uris`), 해시 목록, 다운로드, 설치 전 변경 이력 확인, `--network none` 컨테이너에서 `apt-get install ./*.deb` |
-| Ubuntu 24.04 | ubuntu:24.04 (aarch64) | 위와 같음 + 변경 이력(CVE) 확인 |
+| Ubuntu 24.04 | ubuntu:24.04 (aarch64) | 목록 생성(46개), 해시 목록 대조(46개 OK), `--network none` 컨테이너에서 `apt-get install ./*.deb` 성공. 설치된 `php8.3`의 변경 이력에서 CVE 확인(받은 .deb 안의 변경 이력을 열어 보는 단계는 Ubuntu에서는 실행하지 않음) |
 | RHEL 계열 | rockylinux:9 (aarch64) | `dnf download --resolve`, `yumdownloader --resolve`, `rpmkeys -K`, `dnf install --disablerepo='*' ./*.rpm`(`--network none`), `reposync` 옵션 이름 확인(미실행) |
 | Alpine | alpine:3.22 (3.20은 수정 버전이 없어 저장소 조회까지) | `apk fetch -R`, `apk verify`, `apk add --no-network`, 서명 거부 동작 |
 | SUSE | registry.opensuse.org/opensuse/leap:15.6 | `zypper install --download-only`, `rpmkeys -K`, `zypper install ./*.rpm`(`--network none`) |
@@ -124,8 +124,8 @@ cd /path/to/debs
 sha256sum -c ../sha256.txt                       # 설치 직전에 다시 검증 (2절 규칙 2)
 sudo apt-get install -y --no-install-recommends ./*.deb
 ```
-- [검증] `docker run --network none`인 컨테이너에서 위 명령이 성공(`rc=0`). ubuntu:24.04에서는 설치가 끝난 뒤 `W: Tried to start delayed item ... but failed` 경고가 출력되었지만 설치는 완료되었고 종료 코드는 0이었습니다(오프라인이라 apt가 의존 패키지를 네트워크에서 다시 받으려다 실패하는 경고로 추정, 원인 미확인).
-- `apt-get install ./*.deb`는 로컬 파일의 서명을 검사하지 않습니다. deb 개별 파일에는 서명이 없으므로, **무결성은 5.3의 SHA-256 대조에 달려 있습니다.**
+- [검증] `docker run --network none`인 컨테이너에서 위 명령이 성공(`rc=0`): (1) php8.2-cli가 설치된 debian:12에 php8.2-fpm 묶음(23개), (2) 깨끗한 debian:12에 php8.2-fpm·php8.2-cli 묶음(41개), (3) ubuntu:24.04에 php8.3-fpm 묶음(46개). ubuntu:24.04에서는 설치가 끝난 뒤 `W: Tried to start delayed item ... but failed` 경고가 출력되었지만 설치는 완료되었고 종료 코드는 0이었습니다(원인 미확인).
+- deb 개별 파일에는 서명이 없습니다. `apt-get install ./*.deb`로 로컬 파일을 설치할 때 저장소 서명 검사가 이뤄지지 않는 것으로 알려져 있어(이 저장소에서 시험하지 않음, 미검증), **무결성은 5.3의 SHA-256 대조에 달려 있습니다.** 이 해시도 `apt-get update` 시점에 서명 검증된 패키지 색인에서 나온 값일 때만 의미가 있으므로 목록을 만든 컴퓨터의 신뢰성이 중요합니다.
 - `--no-download`와 상대 경로 `./*.deb`를 함께 쓰면 "Pathname to install is not absolute" 내부 오류가 났습니다(debian:12). 쓰지 마세요.
 - `dpkg -i ./*.deb`는 한 번에 끝나지 않았습니다. 첫 실행은 종료 코드 1(Pre-Depends 순서 문제), 같은 명령을 한 번 더 실행하니 성공했습니다(debian:12). 가능하면 `apt-get install ./*.deb`를 쓰고, `dpkg -i`는 두 번 실행해야 할 수 있음을 알아두세요.
 - 설치 중 설정 파일 충돌 질문이 나오면 기존 설정을 유지하려면 `-o Dpkg::Options::="--force-confold"`를 추가합니다(문법만 모의 실행으로 확인).

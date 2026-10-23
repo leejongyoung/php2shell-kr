@@ -131,6 +131,7 @@ jobs:
           $vuln = @($data.installations | Where-Object { $_.path -like 'C:\php-vulnerable*' -and $_.verdict -eq 'vulnerable' })
           $fixed = @($data.installations | Where-Object { $_.path -like 'C:\php-fixed*' -and $_.verdict -eq 'fixed' })
           if ($vuln.Count -lt 1 -or $fixed.Count -lt 1) { throw "python tool did not classify the Windows builds" }
+          exit 0
       - name: patch plan for Windows is generated and parses
         shell: pwsh
         run: |

@@ -297,8 +297,8 @@ sudo apt-get update
 # 설치된 php*, libapache2-mod-php* 패키지만 골라 업그레이드 (업그레이드가 없으면 0 upgraded)
 sudo apt-get install --only-upgrade $(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'php*' 'libapache2-mod-php*' 2>/dev/null | awk '$1=="ii"{print $2}')
 ```
-- [검증] debian:12, ubuntu:24.04에서 명령 문법 확인(`-s` 모의 실행). `dpkg-query -W 'php*'`만 쓰면 설치되지 않은 패키지 이름까지 나오므로 위처럼 `ii` 상태만 거릅니다.
-- 재시작: `sudo systemctl restart php8.2-fpm`(버전은 환경에 맞게), Apache는 `sudo systemctl restart apache2` [미검증, 서비스 이름은 debian:12에서 `php8.2-fpm.service` 확인].
+- [검증] debian:12에서 `apt-get -s`(모의 실행)로 명령 문법 확인. Ubuntu 24.04에서는 이 명령 자체를 실행하지 않았고(같은 apt 계열이라는 점에서 같은 문법으로 보이나 미검증), 변경 이력 확인과 다운로드 목록 생성만 실행했습니다. `dpkg-query -W 'php*'`만 쓰면 설치되지 않은 패키지 이름까지 나오므로 위처럼 `ii` 상태만 거릅니다.
+- 재시작: `sudo systemctl restart php8.2-fpm`(버전은 환경에 맞게), Apache는 `sudo systemctl restart apache2` [미검증, debian:12에서 `php8.2-fpm.service` 유닛 파일이 설치되는 것은 확인].
 - 보류(hold) 확인: `apt-mark showhold`.
 
 ### RHEL 계열 (Rocky, Alma, RHEL 등: dnf / yum)

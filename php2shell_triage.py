@@ -1799,7 +1799,7 @@ def build_patch_plan(result, info, advisory, mode="online"):
             "Get-Process | Select-Object Id,ProcessName,Path,StartTime | Export-Csv \"$ev\\processes.csv\" -NoTypeInformation",
             "Get-NetTCPConnection | Export-Csv \"$ev\\tcp.csv\" -NoTypeInformation",
             "Copy-Item 'C:\\inetpub\\logs\\LogFiles' -Destination $ev -Recurse -ErrorAction SilentlyContinue",
-            "Get-ChildItem $ev -Recurse -File | Get-FileHash -Algorithm SHA256 | Export-Csv \"$ev\\SHA256.csv\" -NoTypeInformation"]})
+            "@(Get-ChildItem $ev -Recurse -File) | Get-FileHash -Algorithm SHA256 | Export-Csv \"$ev\\SHA256.csv\" -NoTypeInformation"]})
         backups = ["Copy-Item -Recurse -LiteralPath %s -Destination (%s + '.bak-' + (Get-Date -Format yyyyMMdd))" %
                    (ps_literal(d), ps_literal(d)) for d in ctx["install_dirs"]]
         steps.append({"title": "현재 상태 기록·백업", "notes": ["PHP 폴더(php.ini 포함)를 통째로 백업합니다."], "commands": backups or ["# PHP 폴더를 찾지 못했습니다. 설치 경로를 직접 확인하세요."]})

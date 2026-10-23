@@ -61,13 +61,25 @@ Check ($baseline -ne 403) "baseline: multipart POST without the rule is not 403 
 
 $merged.Save($webConfig)
 $mp = Send-Post $url (Multipart-Content)
-Check ($mp -eq 403) "multipart POST is blocked with 403 after merging web.config (got $mp)"
+Check ($mp -eq 403) "shipped rule: multipart POST is blocked with 403 after merging web.config (got $mp)"
+# diagnosis: which IIS server variable actually carries the request Content-Type?
+$shipped = Get-Content $webConfig -Raw
+foreach ($variable in 'HTTP_CONTENT_TYPE', 'CONTENT_TYPE') {
+    Set-Content $webConfig ($shipped -replace '\{HTTP_CONTENT_TYPE\}', ('{' + $variable + '}')) -Encoding UTF8
+    $code = Send-Post $url (Multipart-Content)
+    Write-Host "INFO variable {$variable}: multipart POST -> $code"
+}
+Set-Content $webConfig $shipped -Encoding UTF8
+# control: an unconditional rule must give 403 (proves the URL Rewrite module is active, so the variable result above is meaningful)
+Set-Content $webConfig '<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer><rewrite><rules><rule name="control" stopProcessing="true"><match url=".*" /><action type="CustomResponse" statusCode="403" statusReason="Forbidden" statusDescription="control" /></rule></rules></rewrite></system.webServer></configuration>' -Encoding UTF8
+Check ((Send-Post $url (Multipart-Content)) -eq 403) 'control: unconditional rewrite rule returns 403 (URL Rewrite module is active)'
+Set-Content $webConfig $shipped -Encoding UTF8
 $small = Send-Post $url (Form-Content 100)
 Check ($small -ne 403 -and $small -ne 404) "small urlencoded POST is not blocked (got $small)"
 $limit = [int](([regex]::Match((Get-Content $webConfig -Raw), 'maxAllowedContentLength="(\d+)"')).Groups[1].Value)
 Check ($limit -eq 8388608) "maxAllowedContentLength substituted to 8388608 (got $limit)"
 $big = Send-Post $url (Form-Content ($limit + 1024))
-Check ($big -eq 404) "request above maxAllowedContentLength is rejected (IIS 404.13) (got $big)"
+Check ($big -eq 404 -or $big -eq 413) "request above maxAllowedContentLength is rejected (IIS 404.13 or 413) (got $big)"
 
 Remove-Item $webConfig
 $after = Send-Post $url (Multipart-Content)

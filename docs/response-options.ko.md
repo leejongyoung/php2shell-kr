@@ -343,7 +343,7 @@ service php_fpm restart                    # rc 스크립트 이름은 설치에
 brew update && brew upgrade php            # 버전 지정 설치는 php@8.4 등
 brew services restart php
 ```
-[미검증]. Homebrew 포뮬러가 수정 버전을 반영했는지는 `php -v`와 `brew info php`로 확인하세요. 운영 서버용으로는 권장하지 않습니다.
+[부분 검증] GitHub Actions의 macOS 26.6.2(arm64) 러너에서 `brew install php`(8.5.11)로 설치한 뒤 점검 도구(Python·sh)가 설치 경로(`/opt/homebrew/Cellar/php/<버전>/bin/php`, `sbin/php-fpm`)와 버전을 올바르게 찾았고, `brew info php`가 설치 버전을 보여 줬으며, `brew services start php`(launchd)로 띄운 php-fpm을 `running=true`로 탐지했습니다(재현: `tests/brew_check.sh`). 이 검증 중 실행 중인 php-fpm을 놓치던 결함 두 가지를 찾아 고쳤습니다: (1) sh 판은 php-fpm이 바꾼 프로세스 제목(`php-fpm: master process (...)`)을 실행 파일로 연결하지 못했고, (2) Python 판은 `ps` 출력을 4KB에서 잘라 뒤쪽 프로세스를 놓쳤습니다. **`brew upgrade php`로 취약 버전이 수정 버전으로 바뀌는 흐름과 `brew services restart php` 자체는 시험하지 못했습니다**(그 시점 포뮬러가 이미 최신이라 업그레이드할 대상이 없음). Homebrew 포뮬러가 수정 버전을 반영했는지는 `php -v`와 `brew info php`로 확인하세요. 운영 서버용으로는 권장하지 않습니다.
 
 ### Windows (windows.php.net / php.net 다운로드 페이지)
 PHP 공식 공지는 Windows 소스와 바이너리를 [다운로드 페이지](https://www.php.net/downloads.php?os=windows)에서 받으라고 안내합니다.

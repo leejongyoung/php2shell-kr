@@ -22,8 +22,8 @@ function Post-Multipart {
     $client.Dispose()
     return @{ Status = [int]$response.StatusCode; Location = $location }
 }
-function Try-Rule([string]$Name, [string]$Input, [string]$Pattern, [string]$Action) {
-    $xml = '<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer><rewrite><rules><rule name="d" stopProcessing="true"><match url=".*" /><conditions><add input="' + $Input + '" pattern="' + $Pattern + '" /></conditions>' + $Action + '</rule></rules></rewrite></system.webServer></configuration>'
+function Try-Rule([string]$Name, [string]$Source, [string]$Pattern, [string]$Action) {
+    $xml = '<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer><rewrite><rules><rule name="d" stopProcessing="true"><match url=".*" /><conditions><add input="' + $Source + '" pattern="' + $Pattern + '" /></conditions>' + $Action + '</rule></rules></rewrite></system.webServer></configuration>'
     Set-Content $webConfig $xml -Encoding UTF8
     $r = Post-Multipart
     Write-Host ("RESULT {0,-34} status={1} location={2}" -f $Name, $r.Status, $r.Location)

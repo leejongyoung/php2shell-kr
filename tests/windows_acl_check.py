@@ -63,7 +63,7 @@ def diagnose(path):
         "$i=Get-Item -LiteralPath $p -Force; $a=Get-Acl -LiteralPath $p; "
         "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
         "Write-Output ('level {0} {1} reparse={2} owner={3}' -f $d, $p, [bool]($i.Attributes -band [IO.FileAttributes]::ReparsePoint), $o); "
-        "foreach ($r in $a.Access) { $s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; "
+        "foreach ($r in $a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { $s=$r.IdentityReference.Value; "
         "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11')) { Write-Output ('    {0} {1} rights=0x{2:X} prop={3} inh={4}' -f $s, $r.AccessControlType, [int]$r.FileSystemRights, $r.PropagationFlags, $r.InheritanceFlags) } }; "
         "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n; $d++ }")
     root = p.windows_systemroot()

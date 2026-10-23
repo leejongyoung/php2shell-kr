@@ -612,9 +612,11 @@ def trusted_binary(path, stat_fn=os.stat):
             "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
             "if ($o -notin @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) { exit 1 }; "
             "$m=if ($d -le 1) { 0xD0156 } else { 0xD0150 }; "
-            "foreach ($r in $a.Access) { "
+            # 이름을 SID 로 되돌리는 Translate() 는 "ALL APPLICATION PACKAGES" 같은 SID 에서 예외를 내 기본 System32 가 항상 거부됐다(실제 Windows 에서 확인):
+            # 처음부터 SID 로 받는다.
+            "foreach ($r in $a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { "
             "if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }; "
-            "$s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; "
+            "$s=$r.IdentityReference.Value; "
             "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11') -and "
             "$r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band $m)) { exit 1 } }; "
             "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n; $d++ }; "

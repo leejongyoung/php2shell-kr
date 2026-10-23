@@ -121,13 +121,17 @@ show(BASE)
 check("상위 폴더에서 Authenticated Users 가 하위 항목을 삭제할 수 있으면 신뢰하지 않음", p.trusted_binary(locked_exe), False)
 icacls(BASE, "/remove:g", "*S-1-5-11")
 
-# 4) 정션을 거치는 경로
-junction = os.path.join(BASE, "junction")
-rc = subprocess.run(["cmd.exe", "/c", "mklink", "/J", junction, locked_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).returncode
-if rc == 0:
-    check("정션을 거치는 경로는 신뢰하지 않음", p.trusted_binary(os.path.join(junction, "php.exe")), False)
+# 4) 정션: Python 의 realpath 가 정션을 실제 대상으로 풀기 때문에 판정은 대상 경로의 ACL 로 이뤄진다
+# (POSIX 의 심볼릭 링크와 같은 동작). 신뢰되지 않는 폴더를 가리키는 정션은 거부되고, 신뢰되는 폴더를 가리키면 대상 기준으로 신뢰된다.
+bad_junction = os.path.join(BASE, "junction-to-open")
+good_junction = os.path.join(BASE, "junction-to-locked")
+rc_bad = subprocess.run(["cmd.exe", "/c", "mklink", "/J", bad_junction, open_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).returncode
+rc_good = subprocess.run(["cmd.exe", "/c", "mklink", "/J", good_junction, locked_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).returncode
+if rc_bad == 0 and rc_good == 0:
+    check("신뢰되지 않는 폴더를 가리키는 정션은 거부", p.trusted_binary(os.path.join(bad_junction, "php.exe")), False)
+    check("신뢰되는 폴더를 가리키는 정션은 대상 경로 기준으로 신뢰", p.trusted_binary(os.path.join(good_junction, "php.exe")), True)
 else:
-    print("정보: 정션 생성 실패(rc=%d)" % rc)
+    print("정보: 정션 생성 실패(rc=%d, %d)" % (rc_bad, rc_good))
 
 shutil.rmtree(BASE, ignore_errors=True)
 if failures:

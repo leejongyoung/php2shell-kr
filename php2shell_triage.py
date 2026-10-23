@@ -351,6 +351,7 @@ CLASS_KO = {
 # --- 실행 도우미 -----------------------------------------------------------------
 SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 OUTPUT_LIMIT = 4096
+PS_OUTPUT_LIMIT = 8 * 1024 * 1024   # 프로세스 목록은 4KB 를 훨씬 넘는다. 넘으면 뒤쪽 프로세스(php-fpm 등)를 놓친다
 
 
 def privileged():
@@ -380,8 +381,8 @@ def helper_path(name):
     return shutil.which(name, path=SAFE_PATH)
 
 
-def run(cmd, timeout=6, pass_fds=()):
-    """최소 환경, 닫힌 stdin, 제한 시간 및 4096바이트 stdout. stderr는 보관하지 않는다."""
+def run(cmd, timeout=6, pass_fds=(), limit=OUTPUT_LIMIT):
+    """최소 환경, 닫힌 stdin, 제한 시간 및 stdout 상한(기본 4096바이트). stderr는 보관하지 않는다."""
     env = {"LC_ALL": "C", "PATH": SAFE_PATH}
     if os.name == "nt":
         systemroot = windows_systemroot()
@@ -397,7 +398,7 @@ def run(cmd, timeout=6, pass_fds=()):
                                 env=env, stdin=subprocess.DEVNULL, bufsize=0, **options)
         chunks = []
         def collect():
-            remaining = OUTPUT_LIMIT
+            remaining = limit
             try:
                 while remaining:
                     chunk = os.read(proc.stdout.fileno(), min(1024, remaining))
@@ -806,7 +807,7 @@ def ps_exe_for_pid(pid):
 
 def ps_processes():
     """macOS/BSD: ps 로 PHP 프로세스를 찾는다. 반환: (processes, 일부 프로세스의 실행 파일을 알 수 없었는지)."""
-    code, out = run(["ps", "-axo", "pid=,command="])
+    code, out = run(["ps", "-axo", "pid=,command="], limit=PS_OUTPUT_LIMIT)
     processes = []
     if code is None:
         return processes, True

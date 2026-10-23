@@ -245,7 +245,7 @@ class ScanFixtures(unittest.TestCase):
                    " 5175 php-fpm: pool www\n"
                    " 5176 /usr/local/bin/php-cgi -b 127.0.0.1:9000\n")
 
-        def fake_run(cmd, timeout=6, pass_fds=()):
+        def fake_run(cmd, timeout=6, pass_fds=(), limit=0):
             if cmd[0] == "ps":
                 return 0, listing
             return 0, "p%s\nftxt\nn/opt/homebrew/Cellar/php/8.5.11_1/sbin/php-fpm\n" % cmd[3]
@@ -261,7 +261,7 @@ class ScanFixtures(unittest.TestCase):
                           (5176, "/usr/local/bin/php-cgi")])
 
     def test_ps_reports_limited_visibility_when_title_process_exe_is_unknown(self):
-        def fake_run(cmd, timeout=6, pass_fds=()):
+        def fake_run(cmd, timeout=6, pass_fds=(), limit=0):
             return (0, " 5165 php-fpm: master process (/etc/php-fpm.conf)\n") if cmd[0] == "ps" else (1, "")
 
         with mock.patch.object(triage, "run", fake_run), \
@@ -270,6 +270,25 @@ class ScanFixtures(unittest.TestCase):
             processes, unresolved = triage.ps_processes()
         self.assertEqual(processes, [])
         self.assertTrue(unresolved)
+
+    def test_ps_listing_is_not_cut_at_the_default_output_limit(self):
+        """프로세스 목록은 4KB 를 넘는다. 기본 상한으로 자르면 뒤쪽의 php-fpm 을 놓친다 (macOS 에서 running=false 로 보이던 결함)."""
+        seen = {}
+
+        def fake_run(cmd, timeout=6, pass_fds=(), limit=0):
+            seen["limit"] = limit
+            return 0, "".join(" %d /usr/bin/filler-%d\n" % (i, i) for i in range(1, 400)) + " 9999 /usr/local/sbin/php-fpm --nodaemonize\n"
+
+        with mock.patch.object(triage, "run", fake_run):
+            processes, _ = triage.ps_processes()
+        self.assertGreater(seen["limit"], triage.OUTPUT_LIMIT)
+        self.assertEqual([p["pid"] for p in processes], [9999])
+
+    def test_run_keeps_output_up_to_the_requested_limit(self):
+        default = triage.run(["head", "-c", "20000", "/dev/zero"])[1]
+        larger = triage.run(["head", "-c", "20000", "/dev/zero"], limit=20000)[1]
+        self.assertLessEqual(len(default), triage.OUTPUT_LIMIT)
+        self.assertEqual(len(larger), 20000)
 
 
 class BinaryStringVersion(unittest.TestCase):

@@ -1,0 +1,56 @@
+name: release
+
+# 태그(v*)를 push 하면 배포 묶음을 만들고 GitHub Release 로 올립니다.
+# SHA256SUMS 는 묶음 안에도 있지만 같은 위치라 변조를 막지 못합니다.
+# 해시를 릴리스 노트(별도 경로)에 적고, 출처 증명(attestation)을 붙입니다.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # Release 생성
+      id-token: write        # attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: tests
+        run: python -m unittest discover -s tests
+      - name: build dist
+        run: python tools/build_dist.py --out dist
+      - name: release notes with checksums
+        run: |
+          {
+            echo "## 설치 전에 해시를 확인하세요"
+            echo
+            echo "이 해시는 릴리스 노트(별도 경로)에 적었습니다. 내려받은 압축 파일의 SHA-256 과 대조하세요."
+            echo
+            echo '```'
+            (cd dist && sha256sum *.zip *.tar.gz)
+            echo '```'
+            echo
+            echo "출처 증명(attestation) 확인: \`gh attestation verify <파일> --repo ${GITHUB_REPOSITORY}\`"
+            echo
+            echo "이 도구는 방어용이며 익스플로잇을 포함하지 않습니다. 패치의 책임은 체계관리자에게 있습니다 (README 참고)."
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.tar.gz
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip dist/*.tar.gz --title "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md --verify-tag

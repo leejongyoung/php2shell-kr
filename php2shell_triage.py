@@ -807,7 +807,8 @@ def ps_exe_for_pid(pid):
 
 def ps_processes():
     """macOS/BSD: ps 로 PHP 프로세스를 찾는다. 반환: (processes, 일부 프로세스의 실행 파일을 알 수 없었는지)."""
-    code, out = run(["ps", "-axo", "pid=,command="], limit=PS_OUTPUT_LIMIT)
+    # "-o pid=,command=" 는 FreeBSD 에서 pid 열의 머리글을 ",command=" 로 바꿔 command 열이 없다. -o 를 따로 준다(Linux·macOS·BSD 공통)
+    code, out = run(["ps", "-ax", "-o", "pid=", "-o", "command="], limit=PS_OUTPUT_LIMIT)
     processes = []
     if code is None:
         return processes, True

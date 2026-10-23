@@ -560,7 +560,8 @@ disc_procs() {
       done
       ;;
     ps)
-      if ps -axo pid=,comm= > "$TMPD/ps.txt" 2>/dev/null || ps -eo pid=,comm= > "$TMPD/ps.txt" 2>/dev/null || ps -o pid=,comm= > "$TMPD/ps.txt" 2>/dev/null; then
+      # "-o pid=,comm=" 는 FreeBSD 에서 pid 열의 머리글을 ",comm=" 로 바꿔 comm 열이 없다. -o 를 따로 준다
+      if ps -ax -o pid= -o comm= > "$TMPD/ps.txt" 2>/dev/null || ps -e -o pid= -o comm= > "$TMPD/ps.txt" 2>/dev/null || ps -o pid= -o comm= > "$TMPD/ps.txt" 2>/dev/null; then
         PROC_ENUM=1
         while read -r dp_pid dp_path <&3; do
           case $dp_pid in ''|*[!0-9]*) continue ;; esac

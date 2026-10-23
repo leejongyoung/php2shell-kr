@@ -1,12 +1,12 @@
 # php2shell-triage
 
-![CI](https://github.com/leejongyoung/php2shell-triage/actions/workflows/ci.yml/badge.svg)
-![Release](https://img.shields.io/github/v/release/leejongyoung/php2shell-triage?include_prereleases&sort=semver)
+![CI](https://github.com/leejongyoung/php2shell-kr/actions/workflows/ci.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/leejongyoung/php2shell-kr?include_prereleases&sort=semver)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.6%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Container-lightgrey.svg)
 ![Security](https://img.shields.io/badge/Security-Defensive%20Only-green.svg)
-![Last commit](https://img.shields.io/github/last-commit/leejongyoung/php2shell-triage)
+![Last commit](https://img.shields.io/github/last-commit/leejongyoung/php2shell-kr)
 
 PHP2Shell(**CVE-2026-109618 / CVE-2026-109619**, PHP 엔진의 인증 없는 원격 코드 실행·메모리 노출 취약점) 점검과 대응을
 돕는 **방어용** 도구 모음입니다. Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.

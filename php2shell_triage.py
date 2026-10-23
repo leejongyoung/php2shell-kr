@@ -352,6 +352,7 @@ CLASS_KO = {
 SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 OUTPUT_LIMIT = 4096
 PS_OUTPUT_LIMIT = 8 * 1024 * 1024   # 프로세스 목록은 4KB 를 훨씬 넘는다. 넘으면 뒤쪽 프로세스(php-fpm 등)를 놓친다
+POWERSHELL_TIMEOUT = 90   # 최소 환경의 powershell.exe 는 시작에만 20~30초가 걸린다(실제 Windows 러너에서 측정, 상속 환경은 0.2초)
 
 
 def privileged():
@@ -596,41 +597,119 @@ def read_text(path, limit=2000000, root=None):
     return "\n".join(line[:4096] for line in data.decode("utf-8", "replace").splitlines()) if data is not None else None
 
 
-def windows_trust_script(path):
-    """Windows ACL 신뢰 검사 PowerShell 스크립트. 경로의 모든 구성요소(드라이브 루트까지)를 본다.
+# --- Windows 신뢰 판정 (ACL) -----------------------------------------------------
+# PowerShell 대신 advapi32 를 직접 부른다: 도구가 PowerShell 에 넘기는 최소 환경에서는 `powershell.exe` 가 명령 하나에
+# 20~30초가 걸려(실제 Windows 러너에서 측정: 상속 환경 0.2초) 시간 제한에 걸렸고, 모듈·환경 변수 조작 가능성도 없앤다.
+WINDOWS_TRUSTED_OWNERS = frozenset(("S-1-5-18", "S-1-5-32-544", "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"))
+WINDOWS_UNTRUSTED_WRITERS = frozenset(("S-1-1-0", "S-1-5-32-545", "S-1-5-11"))   # Everyone, Users, Authenticated Users
+# WRITE_DATA/ADD_FILE 0x2, APPEND_DATA/ADD_SUBDIRECTORY 0x4, WRITE_EA 0x10, DELETE_CHILD 0x40, WRITE_ATTRIBUTES 0x100,
+# DELETE 0x10000, WRITE_DAC 0x40000, WRITE_OWNER 0x80000, GENERIC_WRITE 0x40000000, GENERIC_ALL 0x10000000
+WINDOWS_WRITE_MASK = 0x000D0156 | 0x40000000 | 0x10000000
+WINDOWS_WRITE_MASK_ANCESTOR = WINDOWS_WRITE_MASK & ~0x6   # 새 파일/하위 폴더 만들기(0x2, 0x4)는 상위 폴더에서는 무시
 
-    ACL을 확인할 수 없으면 안전하게 실행하지 않는다(예외는 모두 untrusted).
-    파일 자신($d=0)과 그 파일이 든 폴더($d=1)는 전체 쓰기 권한(0xD0156)을 본다: 폴더에 새 파일을 만들 수 있으면 DLL 을 심을 수 있다.
-    더 위의 상위 폴더는 새 파일/하위 폴더 만들기(0x2, 0x4)만 허용하는 권한을 무시한다(0xD0150): 기본 C:\\ 의 Authenticated Users:(AD) 가 그 예이며
-    이미 있는 하위 폴더를 바꾸거나 지울 수는 없다.
+
+def windows_acl_trusted(owner, aces, depth):
+    """한 경로 구성요소의 ACL 이 신뢰할 만한지. aces: [(ace_type, ace_flags, rights, sid)] 또는 None(NULL DACL = 모두에게 허용).
+
+    depth 0 은 파일 자신, 1 은 그 파일이 든 폴더(앱 폴더), 2 이상은 그 위의 상위 폴더다.
+    파일과 앱 폴더는 전체 쓰기 권한을 본다: 앱 폴더에 새 파일을 만들 수 있으면 DLL 을 심어 실행을 가로챌 수 있다.
+    더 위의 상위 폴더는 새 파일/하위 폴더 만들기만 허용하는 권한을 무시한다: 기본 C:\\ 의 Authenticated Users:(AD) 가 그 예이며
+    이것으로는 이미 있는 하위 폴더를 바꾸거나 지울 수 없다. 해석할 수 없는 ACE 는 신뢰하지 않는다.
     """
-    return (
-        "$p=" + ps_literal(path) + "; $d=0; try { while ($p) { "
-        "$i=Get-Item -LiteralPath $p -Force -ErrorAction Stop; "
-        "if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 1 }; "
-        # Get-Acl 은 최소 환경(PSModulePath 없음)의 Windows PowerShell 에서 Microsoft.PowerShell.Security 를 찾느라 20~30초가 걸려 시간 제한에 걸렸다
-        # (실제 Windows 에서 확인). .NET 의 GetAccessControl() 은 모듈 없이 같은 정보를 바로 준다.
-        "$a=$i.GetAccessControl(); "
-        "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
-        "if ($o -notin @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) { exit 1 }; "
-        "$m=if ($d -le 1) { 0xD0156 } else { 0xD0150 }; "
-        # 이름을 SID 로 되돌리는 Translate() 는 "ALL APPLICATION PACKAGES" 같은 SID 에서 예외를 내 기본 System32 가 항상 거부됐다(실제 Windows 에서 확인):
-        # 처음부터 SID 로 받는다.
-        "foreach ($r in $a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { "
-        "if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }; "
-        "$s=$r.IdentityReference.Value; "
-        "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11') -and "
-        "$r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band $m)) { exit 1 } }; "
-        "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n; $d++ }; "
-        "Write-Output TRUSTED } catch { exit 1 }")
+    if owner not in WINDOWS_TRUSTED_OWNERS or aces is None:
+        return False
+    mask = WINDOWS_WRITE_MASK if depth <= 1 else WINDOWS_WRITE_MASK_ANCESTOR
+    for ace_type, ace_flags, rights, sid in aces:
+        if ace_type == 1:              # ACCESS_DENIED: 허용을 줄일 뿐이므로 무시
+            continue
+        if ace_type != 0:              # ACCESS_ALLOWED 가 아닌 허용 계열(콜백·개체 ACE 등)은 해석하지 않고 거부
+            return False
+        if ace_flags & 0x08:           # INHERIT_ONLY_ACE: 이 개체가 아니라 자식에게만 적용
+            continue
+        if sid in WINDOWS_UNTRUSTED_WRITERS and rights & mask:
+            return False
+    return True
+
+
+def windows_path_trusted(path, acl_reader=None):
+    """경로의 모든 구성요소(드라이브 루트까지)가 windows_acl_trusted 를 통과하고 링크가 없는지. 읽을 수 없으면 신뢰하지 않는다."""
+    reader = acl_reader or _windows_read_acl
+    current, depth = path, 0
+    try:
+        while True:
+            reparse, owner, aces = reader(current)
+            if reparse or not windows_acl_trusted(owner, aces, depth):
+                return False
+            parent = os.path.dirname(current)
+            if not parent or parent == current:
+                return True
+            current, depth = parent, depth + 1
+    except (OSError, ValueError):
+        return False
+
+
+def _windows_read_acl(path):
+    """(재해석 지점 여부, 소유자 SID 문자열, [(ace_type, ace_flags, rights, sid)] 또는 None). Windows 전용."""
+    import ctypes
+    from ctypes import wintypes
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    pvoid = ctypes.c_void_p
+    advapi32.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, ctypes.POINTER(pvoid), ctypes.POINTER(pvoid),
+                                               ctypes.POINTER(pvoid), ctypes.POINTER(pvoid), ctypes.POINTER(pvoid)]
+    advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi32.GetAce.argtypes = [pvoid, wintypes.DWORD, ctypes.POINTER(pvoid)]
+    advapi32.GetAce.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [pvoid, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [pvoid]
+    kernel32.LocalFree.restype = pvoid
+    kernel32.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetFileAttributesW.restype = wintypes.DWORD
+
+    def sid_text(sid):
+        text = wintypes.LPWSTR()
+        if not advapi32.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return text.value
+        finally:
+            kernel32.LocalFree(ctypes.cast(text, pvoid))
+
+    attributes = kernel32.GetFileAttributesW(path)
+    if attributes == 0xFFFFFFFF:
+        raise ctypes.WinError(ctypes.get_last_error())
+    owner, dacl, descriptor = pvoid(), pvoid(), pvoid()
+    # SE_FILE_OBJECT=1, OWNER_SECURITY_INFORMATION=1 | DACL_SECURITY_INFORMATION=4
+    status = advapi32.GetNamedSecurityInfoW(path, 1, 1 | 4, ctypes.byref(owner), None, ctypes.byref(dacl), None, ctypes.byref(descriptor))
+    if status != 0:
+        raise OSError(status, "GetNamedSecurityInfoW 실패")
+    try:
+        owner_sid = sid_text(owner)
+        aces = None
+        if dacl.value:
+            aces = []
+            ace_count = ctypes.c_ushort.from_address(dacl.value + 4).value       # ACL.AceCount
+            for index in range(ace_count):
+                ace = pvoid()
+                if not advapi32.GetAce(dacl, index, ctypes.byref(ace)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                ace_type = ctypes.c_ubyte.from_address(ace.value).value
+                ace_flags = ctypes.c_ubyte.from_address(ace.value + 1).value
+                rights = ctypes.c_uint32.from_address(ace.value + 4).value
+                # ACCESS_ALLOWED/DENIED_ACE 는 SID 가 마스크 바로 뒤(+8)에 온다. 다른 종류는 SID 를 읽지 않는다
+                sid = sid_text(pvoid(ace.value + 8)) if ace_type in (0, 1) else None
+                aces.append((ace_type, ace_flags, rights, sid))
+        return bool(attributes & 0x400), owner_sid, aces       # FILE_ATTRIBUTE_REPARSE_POINT
+    finally:
+        kernel32.LocalFree(descriptor)
 
 
 def trusted_binary(path, stat_fn=os.stat):
-    """POSIX root 소유권/권한 검사. stat_fn 주입으로 비특권 테스트 가능."""
+    """POSIX root 소유권/권한 검사. stat_fn 주입으로 비특권 테스트 가능. Windows 는 ACL(위 windows_path_trusted)."""
     path = os.path.realpath(path)
     if os.name == "nt":
-        code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", windows_trust_script(path)], 60)
-        return code == 0 and out.strip() == "TRUSTED"
+        return windows_path_trusted(path)
     if any(path == p or path.startswith(p + "/") for p in
            ("/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp", "/dev/shm", "/run/user", "/home", "/Users")):
         return False
@@ -852,7 +931,7 @@ def ps_processes():
 def windows_processes():
     script = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(php|php-cgi|php-win|httpd)' } | "
               "Select-Object ProcessId,Name,ExecutablePath | ConvertTo-Json -Compress")
-    code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], timeout=30)
+    code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], timeout=POWERSHELL_TIMEOUT)
     processes = []
     if code is None or not out.strip():
         return processes, code is None
@@ -1259,7 +1338,7 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_mode="a
             version_source = "binary-string" if version else version_source
         if not version and os.name == "nt":
             code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                             "(Get-Item -LiteralPath %s).VersionInfo.ProductVersion" % ps_literal(path)])
+                             "(Get-Item -LiteralPath %s).VersionInfo.ProductVersion" % ps_literal(path)], timeout=POWERSHELL_TIMEOUT)
             if code == 0 and parse_version(out):
                 version, version_source = out.strip(), "file-version"
         changelog = vendor_changelog(info["pkg"], package, root)

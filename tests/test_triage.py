@@ -291,6 +291,63 @@ class ScanFixtures(unittest.TestCase):
         self.assertEqual(len(larger), 20000)
 
 
+class WindowsAclPolicy(unittest.TestCase):
+    """Windows ACL 신뢰 정책. 실제 ACL 대신 주입한 ACE 로 모든 플랫폼에서 시험한다(실제 Windows 는 tests/windows_acl_check.py)."""
+    SYSTEM, ADMINS, TRUSTED_INSTALLER = "S-1-5-18", "S-1-5-32-544", "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+    EVERYONE, USERS, AUTH_USERS = "S-1-1-0", "S-1-5-32-545", "S-1-5-11"
+    ALLOW, DENY = 0, 1
+    INHERIT_ONLY = 0x08
+    CREATE_FILE, CREATE_DIR, DELETE_CHILD, DELETE, WRITE_DAC = 0x2, 0x4, 0x40, 0x10000, 0x40000
+    READ_EXECUTE = 0x1200A9
+    # 파일 /a/b/php.exe: 깊이 0 파일, 1 앱 폴더 /a/b, 2 상위 폴더 /a, 3 루트 /
+    FILE, APP, PARENT, ROOT = "/a/b/php.exe", "/a/b", "/a", "/"
+
+    def trusted(self, acls, owner=None):
+        def reader(path):
+            entry = acls.get(path, [])
+            return False, (owner or self.TRUSTED_INSTALLER), entry
+        return triage.windows_path_trusted(self.FILE, reader)
+
+    def ace(self, sid, rights, flags=0, kind=0):
+        return (kind, flags, rights, sid)
+
+    def test_clean_chain_is_trusted_and_read_execute_is_fine(self):
+        self.assertTrue(self.trusted({}))
+        self.assertTrue(self.trusted({self.FILE: [self.ace(self.USERS, self.READ_EXECUTE)], self.APP: [self.ace(self.EVERYONE, self.READ_EXECUTE)]}))
+
+    def test_default_windows_root_create_subdirectory_right_is_ignored_above_the_app_folder(self):
+        """기본 C:\\ 의 Authenticated Users:(AD) 때문에 System32 의 모든 파일이 거부되던 결함."""
+        for level in (self.PARENT, self.ROOT):
+            for create in (self.CREATE_FILE, self.CREATE_DIR):
+                self.assertTrue(self.trusted({level: [self.ace(self.AUTH_USERS, create)]}), (level, create))
+
+    def test_create_rights_in_the_app_folder_or_on_the_file_are_rejected(self):
+        """앱 폴더에 새 파일을 만들 수 있으면 DLL 을 심어 실행을 가로챌 수 있다."""
+        for level in (self.FILE, self.APP):
+            for sid in (self.EVERYONE, self.USERS, self.AUTH_USERS):
+                for create in (self.CREATE_FILE, self.CREATE_DIR):
+                    self.assertFalse(self.trusted({level: [self.ace(sid, create)]}), (level, sid, create))
+
+    def test_rights_that_can_replace_a_path_component_are_rejected_at_every_level(self):
+        for level in (self.FILE, self.APP, self.PARENT, self.ROOT):
+            for right in (self.DELETE_CHILD, self.DELETE, self.WRITE_DAC, 0x80000, 0x40000000, 0x10000000):
+                self.assertFalse(self.trusted({level: [self.ace(self.AUTH_USERS, right)]}), (level, right))
+
+    def test_inherit_only_and_deny_and_trusted_principals_do_not_count(self):
+        self.assertTrue(self.trusted({self.PARENT: [self.ace(self.USERS, 0x1F01FF, self.INHERIT_ONLY)]}))
+        self.assertTrue(self.trusted({self.FILE: [self.ace(self.EVERYONE, 0x1F01FF, 0, self.DENY)]}))
+        self.assertTrue(self.trusted({self.FILE: [self.ace(self.ADMINS, 0x1F01FF), self.ace(self.SYSTEM, 0x1F01FF)]}))
+
+    def test_untrusted_owner_null_dacl_unknown_ace_links_and_read_errors_are_rejected(self):
+        self.assertFalse(self.trusted({}, owner="S-1-5-21-1-2-3-1001"))
+        self.assertFalse(triage.windows_path_trusted(self.FILE, lambda path: (False, self.SYSTEM, None)))       # NULL DACL
+        self.assertFalse(self.trusted({self.APP: [self.ace(self.USERS, 0x1, 0, 9)]}))                          # 해석하지 않는 허용 계열 ACE
+        self.assertFalse(triage.windows_path_trusted(self.FILE, lambda path: (path == self.APP, self.SYSTEM, [])))  # 재해석 지점(링크·정션)
+
+        def unreadable(path):
+            raise OSError(5, "access denied")
+        self.assertFalse(triage.windows_path_trusted(self.FILE, unreadable))
+
 class BinaryStringVersion(unittest.TestCase):
     @POSIX
     def test_no_exec_reads_version_from_binary_without_running_it(self):

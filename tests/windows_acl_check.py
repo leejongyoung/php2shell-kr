@@ -42,27 +42,12 @@ def show(path):
     print("--- icacls %s (rc=%d)\n%s" % (path, code, out.strip()))
 
 
-def check(name, actual, expected, path_for_explain=None):
+def check(name, actual, expected):
     ok = actual == expected
     print("%s %s (실제=%s 기대=%s)" % ("PASS" if ok else "FAIL", name, actual, expected))
     if not ok:
         failures.append(name)
-        if expected is True and path_for_explain:
-            explain(path_for_explain)
 
-
-def explain(path):
-    """trusted_binary 가 untrusted 를 낼 때 원인(종료 코드·출력·오류·소요 시간)을 보이기 위해 같은 스크립트를 직접 실행한다."""
-    import time
-    root = p.windows_systemroot()
-    started = time.time()
-    try:
-        real = subprocess.run([p.helper_path("powershell"), "-NoProfile", "-NonInteractive", "-Command", p.windows_trust_script(path)],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=120,
-                              env={"SystemRoot": root, "PATH": os.path.join(root, "System32")})
-        print("  설명 %s rc=%d %.1fs stdout=%r stderr=%r" % (path, real.returncode, time.time() - started, real.stdout[:100], real.stderr[:1200]))
-    except subprocess.TimeoutExpired:
-        print("  설명 %s: 120초 안에 끝나지 않음" % path)
 
 
 def make(directory, name="php.exe"):
@@ -77,11 +62,7 @@ os.makedirs(BASE)
 show("C:\\")
 show(BASE)
 show(CMD)
-import time
-_t0 = time.time()
-_cmd_trusted = p.trusted_binary(CMD)
-print("정보: System32\\cmd.exe 신뢰 판정 소요 %.1f초" % (time.time() - _t0))
-check("System32\\cmd.exe 는 신뢰함(C:\\ 루트의 (AD) 는 무시)", _cmd_trusted, True, CMD)
+check("System32\\cmd.exe 는 신뢰함(C:\\ 루트의 (AD) 는 무시)", p.trusted_binary(CMD), True)
 
 # 1) Everyone 이 쓸 수 있는 폴더
 open_dir = os.path.join(BASE, "open")
@@ -104,7 +85,7 @@ rc, out = icacls(BASE, "/setowner", "*S-1-5-32-544")
 rc, out = icacls(BASE, "/inheritance:r")
 rc, out = icacls(BASE, "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F")
 show(locked_dir)
-check("Administrators/SYSTEM 전용 폴더의 파일은 신뢰함", p.trusted_binary(locked_exe), True, locked_exe)
+check("Administrators/SYSTEM 전용 폴더의 파일은 신뢰함", p.trusted_binary(locked_exe), True)
 
 # 3) 앱 폴더 / 상위 폴더의 권한. locked_exe 기준: 파일(0) -> locked_dir(앱 폴더, 1) -> BASE(상위, 2)
 rc, out = icacls(locked_dir, "/grant", "*S-1-5-32-545:(WD)")   # Users: 이 폴더에 새 파일 만들기

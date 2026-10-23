@@ -15,10 +15,28 @@ function Fail([string]$m) { Write-Host "FAIL $m"; $script:Failures++ }
 function Check([bool]$ok, [string]$m) { if ($ok) { Pass $m } else { Fail $m } }
 
 function Send-Post([string]$Url, $Content) {
-    $client = New-Object System.Net.Http.HttpClient
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.AllowAutoRedirect = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
     $client.Timeout = [TimeSpan]::FromSeconds(60)
-    try { return [int]($client.PostAsync($Url, $Content).GetAwaiter().GetResult().StatusCode) }
+    try {
+        $request = New-Object System.Net.Http.HttpRequestMessage('POST', $Url)
+        $request.Content = $Content
+        return [int]($client.SendAsync($request).GetAwaiter().GetResult().StatusCode)
+    }
     finally { $client.Dispose() }
+}
+# IIS picks up a changed web.config asynchronously: poll for the expected status and report how long it took
+function Wait-Post([string]$Url, [scriptblock]$MakeContent, [int]$Expected, [int]$Seconds = 20) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $code = 0
+    do {
+        $code = Send-Post $Url (& $MakeContent)
+        if ($code -eq $Expected) { break }
+        Start-Sleep -Milliseconds 500
+    } while ($watch.Elapsed.TotalSeconds -lt $Seconds)
+    Write-Host ("  status {0} after {1:N1}s (expected {2})" -f $code, $watch.Elapsed.TotalSeconds, $Expected)
+    return $code
 }
 function Multipart-Content {
     $c = New-Object System.Net.Http.MultipartFormDataContent
@@ -60,7 +78,7 @@ $baseline = Send-Post $url (Multipart-Content)
 Check ($baseline -ne 403) "baseline: multipart POST without the rule is not 403 (got $baseline)"
 
 $merged.Save($webConfig)
-$mp = Send-Post $url (Multipart-Content)
+$mp = Wait-Post $url { Multipart-Content } 403
 Check ($mp -eq 403) "shipped rule: multipart POST is blocked with 403 after merging web.config (got $mp)"
 # diagnosis: which IIS server variable actually carries the request Content-Type?
 $shipped = Get-Content $webConfig -Raw
@@ -72,8 +90,9 @@ foreach ($variable in 'HTTP_CONTENT_TYPE', 'CONTENT_TYPE') {
 Set-Content $webConfig $shipped -Encoding UTF8
 # control: an unconditional rule must give 403 (proves the URL Rewrite module is active, so the variable result above is meaningful)
 Set-Content $webConfig '<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer><rewrite><rules><rule name="control" stopProcessing="true"><match url=".*" /><action type="CustomResponse" statusCode="403" statusReason="Forbidden" statusDescription="control" /></rule></rules></rewrite></system.webServer></configuration>' -Encoding UTF8
-Check ((Send-Post $url (Multipart-Content)) -eq 403) 'control: unconditional rewrite rule returns 403 (URL Rewrite module is active)'
+Check ((Wait-Post $url { Multipart-Content } 403) -eq 403) 'control: unconditional rewrite rule returns 403 (URL Rewrite module is active)'
 Set-Content $webConfig $shipped -Encoding UTF8
+[void](Wait-Post $url { Multipart-Content } 403)   # wait until the shipped config is active again
 $small = Send-Post $url (Form-Content 100)
 Check ($small -ne 403 -and $small -ne 404) "small urlencoded POST is not blocked (got $small)"
 $limit = [int](([regex]::Match((Get-Content $webConfig -Raw), 'maxAllowedContentLength="(\d+)"')).Groups[1].Value)
@@ -82,7 +101,7 @@ $big = Send-Post $url (Form-Content ($limit + 1024))
 Check ($big -eq 404 -or $big -eq 413) "request above maxAllowedContentLength is rejected (IIS 404.13 or 413) (got $big)"
 
 Remove-Item $webConfig
-$after = Send-Post $url (Multipart-Content)
+$after = Wait-Post $url { Multipart-Content } 405
 Check ($after -ne 403) "rollback: after deleting web.config multipart is no longer 403 (got $after)"
 
 # ---------------------------------------------------------------- 2) IIS FastCGI + real php-cgi

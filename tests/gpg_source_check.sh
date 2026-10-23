@@ -15,11 +15,12 @@ trap 'rm -rf "$WORK"' EXIT
 FAIL=0
 pass() { echo "PASS $*"; }
 fail() { echo "FAIL $*"; FAIL=1; }
+retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -ge 3 ] && return 1; sleep $((5 * n)); done; }   # 네트워크 일시 오류 재시도
 
 cd "$WORK" || exit 2
-curl -fsSL -o "php-$VER.tar.xz" "https://www.php.net/distributions/php-$VER.tar.xz" || { fail "tarball 다운로드"; exit 1; }
-curl -fsSL -o "php-$VER.tar.xz.asc" "https://www.php.net/distributions/php-$VER.tar.xz.asc" || { fail "서명 다운로드"; exit 1; }
-curl -fsSL -o keys.html https://www.php.net/gpg-keys.php || { fail "php.net 키 페이지 다운로드"; exit 1; }
+retry curl -fsSL -o "php-$VER.tar.xz" "https://www.php.net/distributions/php-$VER.tar.xz" || { fail "tarball 다운로드"; exit 1; }
+retry curl -fsSL -o "php-$VER.tar.xz.asc" "https://www.php.net/distributions/php-$VER.tar.xz.asc" || { fail "서명 다운로드"; exit 1; }
+retry curl -fsSL -o keys.html https://www.php.net/gpg-keys.php || { fail "php.net 키 페이지 다운로드"; exit 1; }
 
 # 서명에 쓰인 키 지문 (gpg --verify 의 VALIDSIG/ERRSIG 상태 줄)
 FP="$(gpg --status-fd 1 --verify "php-$VER.tar.xz.asc" "php-$VER.tar.xz" 2>/dev/null | awk '/ERRSIG/ {print $3}')"
@@ -36,7 +37,7 @@ if gpg --verify "php-$VER.tar.xz.asc" "php-$VER.tar.xz" 2>&1 | grep -q "BAD sign
 for b in 7.4 8.0 8.1; do
   br="PHP-$b-CVE-2026-109618-109619"
   dir="src-$b"
-  git clone -q --filter=blob:none --no-checkout --single-branch --branch "$br" https://github.com/php/php-src.git "$dir" || { fail "$br 클론"; continue; }
+  retry git clone -q --filter=blob:none --no-checkout --single-branch --branch "$br" https://github.com/php/php-src.git "$dir" || { fail "$br 클론"; continue; }
   tip="$(git -C "$dir" rev-parse HEAD)"
   login="$(curl -fsSL "https://api.github.com/repos/php/php-src/commits/$tip" | python3 -c 'import json,sys; print(json.load(sys.stdin)["committer"]["login"])')"
   curl -fsSL "https://github.com/$login.gpg" | gpg --import 2>/dev/null

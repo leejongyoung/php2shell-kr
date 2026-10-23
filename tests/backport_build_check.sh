@@ -9,6 +9,7 @@ IMAGE="${IMAGE:-$REGISTRY/debian:12-slim}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 FAIL=0
+retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -ge 3 ] && return 1; sleep $((5 * n)); done; }   # GitHub 가 간헐적으로 408/5xx 를 낸다
 
 cat >"$WORK/build.sh" <<'E'
 set -e
@@ -25,7 +26,8 @@ E
 for b in "$@"; do
   br="PHP-$b-CVE-2026-109618-109619"
   d="$WORK/$b"; mkdir -p "$d"
-  git clone -q --filter=blob:none --no-checkout --single-branch --branch "$br" https://github.com/php/php-src.git "$d/repo" || { echo "FAIL $br 클론"; FAIL=1; continue; }
+  rm -rf "$d/repo"
+  retry git clone -q --depth 1 --single-branch --branch "$br" https://github.com/php/php-src.git "$d/repo" || { echo "FAIL $br 클론"; FAIL=1; continue; }
   git -C "$d/repo" archive --format=tar --prefix=src/ HEAD -o "$d/src.tar" || { echo "FAIL $br archive"; FAIL=1; continue; }
   cp "$WORK/build.sh" "$d/build.sh"
   out="$(docker run --rm -v "$d:/in:ro" "$IMAGE" sh /in/build.sh 2>&1)"

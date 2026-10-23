@@ -73,6 +73,10 @@ def diagnose(path):
         result = subprocess.run([p.helper_path("powershell"), "-NoProfile", "-NonInteractive", "-Command", script],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, env=env)
         print("--- diagnose %s [%s] rc=%d\n%s" % (path, label, result.returncode, result.stdout.strip()[:3000]))
+    real = subprocess.run([p.helper_path("powershell"), "-NoProfile", "-NonInteractive", "-Command", p.windows_trust_script(path)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                          env={"SystemRoot": root, "PATH": os.path.join(root, "System32")})
+    print("--- 실제 신뢰 스크립트 %s rc=%d stdout=%r stderr=%r" % (path, real.returncode, real.stdout[:200], real.stderr[:1500]))
 
 shutil.rmtree(BASE, ignore_errors=True)
 os.makedirs(BASE)

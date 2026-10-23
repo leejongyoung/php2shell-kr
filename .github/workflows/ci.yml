@@ -62,8 +62,13 @@ jobs:
           - { os: macos-latest, shell: pwsh }
     steps:
       - uses: actions/checkout@v4
-      - name: harness
-        shell: ${{ matrix.shell }}
+      - name: harness (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: ./tests/test_quickcheck_ps1.ps1
+      - name: harness (PowerShell 7)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ./tests/test_quickcheck_ps1.ps1
 
   real-php-linux:

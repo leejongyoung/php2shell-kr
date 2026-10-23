@@ -71,7 +71,8 @@ F 가상 패치 · G 노출 축소·서비스 중단 · H 사후 피해 억제·
 ## 테스트와 검증 현황
 
 - 단위 테스트, Python 3.6, sh(여러 배포판), PowerShell, 실제 PHP 컨테이너 이미지, Windows·macOS·Linux CI 결과는
-  [docs/verification.ko.md](docs/verification.ko.md) 에 **실행한 것과 하지 못한 것을 구분해** 적었습니다.
+  [docs/verification.ko.md](docs/verification.ko.md) 에 **실행한 것과 하지 못한 것을 구분해** 적었습니다. Kubernetes(kind), Homebrew, FreeBSD, 실제 systemd 호스트,
+  Windows IIS·ACL, GPG 서명, 7.4/8.0/8.1 백포트 빌드 같은 실제 환경 항목은 `.github/workflows/extended.yml` 이 실행합니다.
 - Docker가 있으면 누구나 재현할 수 있습니다: `python3 tests/platform_matrix.py` ([docs/testing.ko.md](docs/testing.ko.md)).
 
 ## 한계와 책임

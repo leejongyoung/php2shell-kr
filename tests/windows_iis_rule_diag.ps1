@@ -46,3 +46,25 @@ Try-Rule 'echo ALL_RAW'                 '{ALL_RAW}'            '(.*)'      $redi
 Try-Rule 'echo CONTENT_TYPE'            '{CONTENT_TYPE}'       '(.*)'      $redirect
 Try-Rule 'echo HTTP_CONTENT_TYPE'       '{HTTP_CONTENT_TYPE}'  '(.*)'      $redirect
 Remove-Item $webConfig -ErrorAction SilentlyContinue
+
+# --- the shipped files themselves
+$Repo = Split-Path -Parent $PSScriptRoot
+$out = Join-Path $env:TEMP ('p2s-vp-' + [guid]::NewGuid().ToString('N'))
+python "$Repo\php2shell_triage.py" --emit-virtual-patch $out --uploads no 2>&1 | Out-Null
+Copy-Item (Join-Path $out 'iis\web.config.block-multipart.xml') $webConfig -Force
+$r = Post-Multipart
+Write-Host ("RESULT {0,-34} status={1}" -f 'shipped block-multipart.xml as-is', $r.Status)
+Write-Host '--- as-is file:'; Get-Content $webConfig | Write-Host
+Copy-Item (Join-Path $out 'iis\web.config.snippet.xml') $webConfig -Force
+$r = Post-Multipart
+Write-Host ("RESULT {0,-34} status={1}" -f 'shipped snippet.xml as-is', $r.Status)
+$rule = [xml](Get-Content (Join-Path $out 'iis\web.config.block-multipart.xml') -Raw -Encoding UTF8)
+$snip = [xml](Get-Content (Join-Path $out 'iis\web.config.snippet.xml') -Raw -Encoding UTF8)
+$merged = [xml]'<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer/></configuration>'
+$target = $merged.SelectSingleNode('/configuration/system.webServer')
+foreach ($doc in @($rule, $snip)) { foreach ($node in @($doc.SelectSingleNode('/configuration/system.webServer').ChildNodes)) { [void]$target.AppendChild($merged.ImportNode($node, $true)) } }
+$merged.Save($webConfig)
+$r = Post-Multipart
+Write-Host ("RESULT {0,-34} status={1}" -f 'merged rule+snippet', $r.Status)
+Write-Host '--- merged file:'; Get-Content $webConfig | Write-Host
+Remove-Item $webConfig -ErrorAction SilentlyContinue

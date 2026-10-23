@@ -336,7 +336,7 @@ pkg update && pkg audit -F                 # 취약점 DB를 받아 점검
 pkg upgrade -g 'php*'                      # php84 등과 php84-* 확장 모두
 service php_fpm restart                    # rc 스크립트 이름은 설치에 따라 다를 수 있음
 ```
-[미검증] 전부 실행하지 못했습니다(FreeBSD 환경 없음).
+[부분 검증] GitHub Actions의 FreeBSD 14.3 VM에서 `pkg install php84`(8.4.27)로 설치한 뒤 `tests/freebsd_check.sh`로 확인했습니다: sh 하네스 통과, 점검 도구(sh·Python)가 `/usr/local/bin/php`, `/usr/local/bin/php-cgi`, `/usr/local/sbin/php-fpm`과 버전을 찾았고 Python 판이 패키지 관리자를 `pkg`로 인식했습니다. `pkg audit -F`는 동작했고(종료 코드 1 = 취약 패키지 보고, 이 실행에서는 python312·brotli·curl 등 PHP 외 패키지가 보고됨), `pkg upgrade -n -g 'php*'`(모의 실행), `sysrc php_fpm_enable=YES` 후 `service php_fpm onestart`/`restart`가 동작했으며, 실행 중인 php-fpm을 두 구현 모두 `running=true`로 찾았습니다. 이 검증 중 FreeBSD의 `ps -o pid=,comm=`가 첫 열 머리글만 바꾸고 다른 열을 내지 않아 두 구현 모두 프로세스를 하나도 못 찾던 결함을 찾아 `-o pid= -o comm=` 형태로 고쳤습니다. **미검증**: 취약 버전이 설치된 상태에서 `pkg upgrade -g 'php*'`로 수정 버전으로 교체되는 흐름(그 시점 저장소 패키지가 이미 8.4.27), `pkg audit`에 이 CVE가 등재되는지.
 
 ### macOS Homebrew (개발용)
 ```sh

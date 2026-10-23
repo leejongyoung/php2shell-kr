@@ -56,34 +56,11 @@ def make(directory, name="php.exe"):
     return target
 
 
-def diagnose(path):
-    """trusted_binary 와 같은 순서로 각 구성요소의 소유자와 untrusted SID 의 ACE 를 출력한다 (실패 원인 파악용)."""
-    script = (
-        "$p='" + path + "'; $d=0; while ($p) { "
-        "$i=Get-Item -LiteralPath $p -Force; $a=Get-Acl -LiteralPath $p; "
-        "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
-        "Write-Output ('level {0} {1} reparse={2} owner={3}' -f $d, $p, [bool]($i.Attributes -band [IO.FileAttributes]::ReparsePoint), $o); "
-        "foreach ($r in $a.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { $s=$r.IdentityReference.Value; "
-        "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11')) { Write-Output ('    {0} {1} rights=0x{2:X} prop={3} inh={4}' -f $s, $r.AccessControlType, [int]$r.FileSystemRights, $r.PropagationFlags, $r.InheritanceFlags) } }; "
-        "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n; $d++ }")
-    root = p.windows_systemroot()
-    environments = (("도구와 같은 최소 환경", {"SystemRoot": root, "PATH": os.path.join(root, "System32")}),
-                    ("상속 환경", None))
-    for label, env in environments:
-        result = subprocess.run([p.helper_path("powershell"), "-NoProfile", "-NonInteractive", "-Command", script],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, env=env)
-        print("--- diagnose %s [%s] rc=%d\n%s" % (path, label, result.returncode, result.stdout.strip()[:3000]))
-    real = subprocess.run([p.helper_path("powershell"), "-NoProfile", "-NonInteractive", "-Command", p.windows_trust_script(path)],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-                          env={"SystemRoot": root, "PATH": os.path.join(root, "System32")})
-    print("--- 실제 신뢰 스크립트 %s rc=%d stdout=%r stderr=%r" % (path, real.returncode, real.stdout[:200], real.stderr[:1500]))
-
 shutil.rmtree(BASE, ignore_errors=True)
 os.makedirs(BASE)
 show("C:\\")
 show(BASE)
 show(CMD)
-diagnose(CMD)
 check("System32\\cmd.exe 는 신뢰함(C:\\ 루트의 (AD) 는 무시)", p.trusted_binary(CMD), True)
 
 # 1) Everyone 이 쓸 수 있는 폴더
@@ -107,7 +84,6 @@ rc, out = icacls(BASE, "/setowner", "*S-1-5-32-544")
 rc, out = icacls(BASE, "/inheritance:r")
 rc, out = icacls(BASE, "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F")
 show(locked_dir)
-diagnose(locked_exe)
 check("Administrators/SYSTEM 전용 폴더의 파일은 신뢰함", p.trusted_binary(locked_exe), True)
 
 # 3) 앱 폴더 / 상위 폴더의 권한. locked_exe 기준: 파일(0) -> locked_dir(앱 폴더, 1) -> BASE(상위, 2)

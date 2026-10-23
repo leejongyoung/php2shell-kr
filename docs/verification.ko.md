@@ -2,7 +2,7 @@
 
 실제로 실행해 확인한 것과 확인하지 못한 것을 구분해 적습니다. 숫자는 실행 결과를 그대로 옮긴 것입니다.
 
-- 기준 커밋: 1~4절은 `851bb54`(보안 하드닝 반영 후), 5절의 확장 검증은 `3ae9663`(그 이후 코드 변경은 5절에 적은 결함 수정 5건과 테스트 추가. 이후 커밋은 문서·주석만 바꿈)
+- 기준 커밋: 1~4절은 `851bb54`(보안 하드닝 반영 후), 5절의 확장 검증은 `3ae9663`(그 이후 코드 변경은 5절에 적은 도구 결함 수정 6건과 테스트 추가. 이후 커밋은 문서·주석만 바꿈). Windows ACL 판정 수정(5절 결함 표 마지막 행)은 그 뒤 커밋에서 별도로 검증함
 - 날짜: 2026-10-23, 권고 데이터 기준일 `data/advisory.json`의 `as_of`
 - 주의: 하드닝 이전 커밋의 CI 통과 기록은 이 문서의 근거로 쓰지 않았습니다. 이전 커밋에는 하드닝이 들어 있지 않았고, 하드닝 후 첫 CI(`76d589f`)에서는 4건이 실패해 고쳤습니다.
 
@@ -67,7 +67,7 @@ run `39931232943`, 커밋 `851bb54`: **21개 잡 모두 성공**
 | Linux 호스트 | Ubuntu 24.04 러너(진짜 systemd), php8.3-fpm | systemd drop-in 적용·롤백(MemoryMax·OOMPolicy 반영), 패키지 파일 교체 후 "재시작 필요" 탐지와 `systemctl restart` 후 해소, root 실행 시 `process_visibility=full`, auditd 규칙 로드(`auditctl -R`·`-l`), `nft -c`·적용(www-data 신규 외부 연결만 차단)·롤백 | `linux_host_check.sh` |
 | Homebrew | macOS 26.6.2 arm64 러너, `brew install php`(8.5.11) | Python·sh 판이 Cellar 경로·버전 탐지, `brew info php`, `brew services start php`로 띄운 php-fpm을 `running=true` | `brew_check.sh` |
 | FreeBSD | FreeBSD 14.3 VM, `pkg install php84`(8.4.27) | sh 하네스, Python·sh 판 탐지, 패키지 관리자 `pkg` 인식, `pkg audit -F`, `pkg upgrade -n`, `service php_fpm onestart/restart`, 실행 중 php-fpm 탐지 | `freebsd_check.sh` |
-| Windows ACL | windows-latest | Everyone 쓰기 가능 폴더의 파일과 정션 경로는 untrusted | `windows_acl_check.py` |
+| Windows ACL (실제 ACL로 `trusted_binary` 판정) | windows-latest | `System32\cmd.exe`와 Administrators/SYSTEM 전용 폴더의 파일은 trusted. 거부: Everyone 쓰기 가능 폴더, 앱 폴더에 Users가 새 파일을 만들 수 있는 경우, 상위 폴더에서 Authenticated Users가 하위 항목을 삭제할 수 있는 경우, 정션 경로. 무시: 앱 폴더 위 상위 폴더의 `Authenticated Users:(AD)`(기본 `C:\` 와 같은 권한) | `windows_acl_check.py` |
 | IIS web.config | windows-latest, IIS + URL Rewrite | 병합한 web.config로 multipart POST 403(`{HTTP_CONTENT_TYPE}`·`{CONTENT_TYPE}` 모두 Content-Type 전달), 크기 상한 초과 본문 413, 파일 삭제로 롤백 | `windows_iis_check.ps1` |
 | IIS FastCGI | windows-latest, php-cgi 8.4.27 | IIS가 PHP를 FastCGI로 서빙, 점검 도구가 php-cgi를 `running`으로 탐지, `iisreset /stop` 후 프로세스 없음, `/start` 후 더 늦은 StartTime으로 재기동 | `windows_iis_check.ps1` |
 | 패치 계획(ps1) | windows-latest | 생성된 `patch-plan.ps1`의 증거 단계 실행: 폴더 생성, `processes.csv`·`tcp.csv`·`SHA256.csv`, ACL이 Administrators·SYSTEM만 | `windows_iis_check.ps1` |
@@ -82,10 +82,11 @@ run `39931232943`, 커밋 `851bb54`: **21개 잡 모두 성공**
 | Python 판이 `ps` 출력을 4KB에서 자름 | 프로세스가 많은 macOS/BSD에서 뒤쪽 php-fpm을 놓침 | `ps` 목록은 8MiB까지 읽음 |
 | FreeBSD의 `ps -o pid=,comm=` | 첫 열 머리글만 바뀌고 다른 열이 없어 두 구현 모두 프로세스를 하나도 못 찾음 | `-o pid= -o comm=` 형태로 분리 |
 | 패치 계획 증거 단계의 SHA256 명령 | 출력 파일(`SHA256.csv`)을 해시하려다 읽기 오류 | 파일 목록을 먼저 확정한 뒤 해시 |
+| Windows ACL 신뢰 판정이 기본 Windows에서 항상 False | `System32\cmd.exe`조차 untrusted라 Windows에서는 PHP를 실행하지 않고 파일의 버전 문자열로만 판정. 원인 두 가지: (1) ACE 식별자를 `Translate()`로 SID로 되돌리다 `ALL APPLICATION PACKAGES` 같은 항목에서 예외가 나 전체가 untrusted, (2) 기본 `C:\` 의 `Authenticated Users:(AD)`(하위 폴더 만들기)가 상위 폴더 검사에 걸림 | SID를 처음부터 `GetAccessRules(..., [SecurityIdentifier])`로 받고, 파일과 그 폴더(앱 폴더)만 전체 쓰기 권한을 보며 더 위의 상위 폴더는 만들기 권한(0x2·0x4)을 무시. `quickcheck/php2shell-quickcheck.ps1`의 `Test-TrustedPath`에도 같은 정책을 적용하고 하네스 케이스 추가 |
 
-**확인했지만 도구를 바꾸지 않은 한계**
+**확인한 한계와 주의**
 
-- 기본 Windows에서는 `System32\cmd.exe`조차 `trusted_binary`가 False입니다. `C:\` 루트의 기본 ACL(`Authenticated Users:(AD)`)이 상위 폴더 검사에 걸리기 때문입니다. 그래서 Windows에서는 PHP를 실행하지 않고 파일의 버전 문자열로 판정합니다(안전한 쪽으로 실패). 검사를 완화할지는 별도 결정이 필요합니다.
+- (해결됨) 처음에는 "기본 Windows에서 `System32\cmd.exe`조차 untrusted인 것은 `C:\` 루트 ACL 때문"이라고 판단했으나 진단 결과 원인이 하나 더 있었고(위 결함 표), 둘 다 고쳤습니다. 주의: 사용자가 만든 `C:\php` 같은 폴더는 기본으로 `Authenticated Users:(M)`을 상속하므로 여전히 untrusted이며, 관리자가 폴더 ACL을 잠가야 실행 대상이 됩니다(의도된 동작).
 - IIS는 크기 상한 초과를 404.13이 아니라 413으로 거절했습니다(시험한 러너 기준).
 - 백포트 브랜치 서명 키 `2592 99AD ...`는 php.net 키 페이지와 `keyserver.ubuntu.com`에 없었고, 커미터의 GitHub 계정 키로만 검증했습니다. 릴리스 관리자의 키인지는 독립 확인이 필요합니다.
 - 한 번 CI에서 점검 도구가 IIS의 php-cgi를 `running`으로 보고하지 못한 적이 있었으나(run `39960499983`) 재현되지 않았고 원인을 확정하지 못했습니다. 진단 출력과 재시도를 넣었고 최종 실행은 첫 시도에 통과했습니다.
@@ -101,5 +102,6 @@ run `39931232943`, 커밋 `851bb54`: **21개 잡 모두 성공**
 - 장시간 부하·실제 공격 트래픽에서의 가상 패치 효과(우회 가능성은 문서에 명시)
 - 이 도구의 판정이 모든 배포판·설정을 포괄한다는 보장. 가상호스트별 `.user.ini`·`.htaccess`·`ini_set()`는 정적으로 알 수 없습니다.
 - 이 검증은 임시 VM·CI 러너에서 한 번 실행한 결과입니다. 서로 다른 OS 버전·설정에서의 재현성은 보장하지 않습니다.
+- `quickcheck/php2shell-quickcheck.ps1`·`.bat`의 `Test-TrustedPath`를 **실제 Windows ACL로** 시험하지는 않았습니다(하네스는 주입한 ACL 값 사용). Python 판의 실제 ACL 판정만 위 표대로 검증했습니다.
 
 ## 7. 재현

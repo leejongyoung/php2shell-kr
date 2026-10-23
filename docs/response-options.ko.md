@@ -363,7 +363,7 @@ Copy-Item C:\php\php.ini .\php-8.4.27\php.ini
 Rename-Item C:\php php-old
 Rename-Item .\php-8.4.27 php        # 같은 상위 폴더에서
 ```
-- [미검증] 위 PowerShell 명령과 Windows·IIS 동작은 이 저장소에서 실행하지 못했습니다(PowerShell 컨테이너가 에뮬레이션에서 비정상 종료). 문법과 동작은 실제 Windows에서 먼저 시험하세요.
+- [부분 검증] GitHub Actions의 Windows 러너에서 `Get-FileHash`(다운로드한 PHP zip의 SHA-256 대조)와 `Expand-Archive`(압축 해제)는 `ci.yml`·`extended.yml`이 실제로 실행합니다. 점검 도구가 만든 `patch-plan.ps1`의 증거 보존 단계(`icacls`로 폴더 ACL 제한, `Get-Process`, `Get-NetTCPConnection`, `Get-FileHash` → CSV)도 러너에서 실행해 확인했고, IIS에서는 `iisreset /stop`·`/start`가 동작했습니다(`tests/windows_iis_check.ps1`). **그러나 위 4번의 교체 절차 전체(서비스 중지 → `Rename-Item`으로 폴더 교체 → `php.ini` 이식 → 시작)는 실행하지 못했습니다(미검증).** 계획 파일 자체도 이 단계들을 주석 처리해 두므로 실제 Windows에서 먼저 시험하세요.
 - 옛 폴더(`php-old`)는 취약하므로 확인이 끝나면 접근 불가능한 곳으로 옮기거나 삭제하고 PATH·핸들러 매핑이 새 폴더를 가리키는지 확인.
 - PHP가 포함된 Windows용 설치 패키지(제품에 내장된 PHP)는 직접 교체하지 말고 공급사에 확인(옵션 E).
 
@@ -449,9 +449,10 @@ docker exec CONTAINER sh -c 'php-fpm -v || apache2ctl -v'  # 웹 SAPI 바이너�
 | `zypper list-patches --cve=`, `zypper ps` | registry.opensuse.org/opensuse/leap:15.6 | 동작 (패치 없음 응답) |
 | `apk fetch -R`, `apk add`, `apk verify` | alpine:3.22 | 동작([`offline-patching.ko.md`](offline-patching.ko.md)) |
 | `ls -l /proc/PID/exe`, `libphp` 맵 점검, `find ... php-fpm*`, `apache2ctl -M`, `nginx -t`, `apache2ctl configtest` | debian:12 | 동작 |
-| PowerShell `Get-FileHash`, `Expand-Archive` 등 Windows 절차 | mcr.microsoft.com/powershell | **실행하지 못함(미검증)**: aarch64 호스트에서 에뮬레이션 중 PowerShell이 비정상 종료 |
+| PowerShell `Get-FileHash`, `Expand-Archive`, `icacls`, `Get-NetTCPConnection`, `iisreset` | GitHub Actions `windows-latest` | 동작 (컨테이너에서는 aarch64 에뮬레이션 중 PowerShell이 비정상 종료해 실행하지 못했음). 폴더 교체 전체 절차는 미검증 |
 | 7.4/8.0/8.1 백포트 브랜치 클론·빌드 | debian:12 | 아래 "소스 빌드 검증" 참고 |
-| FreeBSD pkg, Homebrew, Windows 실제 교체, Kubernetes, Docker Compose, systemd 재시작, auditd, `dnf needs-restarting` 동작 | - | 미검증 |
+| Kubernetes(kind), Docker Compose unix 소켓, systemd drop-in·재시작, auditd 규칙 로드, nftables 적용, GPG 서명, FreeBSD pkg·rc, Homebrew, IIS web.config | GitHub Actions·로컬 Docker (`tests/*_check.sh`) | 동작 ([`verification.ko.md`](verification.ko.md) 5절) |
+| Windows 실제 폴더 교체, `dnf needs-restarting`, `brew upgrade php`로 취약→수정 교체, `pkg upgrade`로 취약→수정 교체, SELinux/AppArmor | - | 미검증 |
 
 ### 소스 빌드 검증 (옵션 D)
 

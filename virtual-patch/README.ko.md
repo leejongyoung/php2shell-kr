@@ -17,8 +17,8 @@
 | `nginx/php2shell-mitigation.conf` | nginx 크기/헤더/빈도 제한 |
 | `nginx/php2shell-block-multipart.conf` | 업로드 없는 사이트 전용 multipart 차단 |
 | `modsecurity/php2shell.conf` | ModSecurity 규칙(ID 91001-91010) |
-| `iis/web.config.snippet.xml` | IIS 요청 크기 상한만 설정 (미검증: IIS 환경 없음) |
-| `iis/web.config.block-multipart.xml` | 업로드 없는 사이트 전용 multipart 차단; 업로드 없음 선택 시에만 생성 (미검증: IIS 환경 없음) |
+| `iis/web.config.snippet.xml` | IIS 요청 크기 상한만 설정 (Windows 러너의 IIS에서 검증) |
+| `iis/web.config.block-multipart.xml` | 업로드 없는 사이트 전용 multipart 차단; 업로드 없음 선택 시에만 생성 (Windows 러너의 IIS에서 검증) |
 | `os/systemd-php-fpm-dropin.conf` | 메모리 상한(가용성 경계) |
 | `os/docker-compose-hardening.yml` | 컨테이너 하드닝 예시 |
 | `os/auditd-php2shell.rules` | 탐지 규칙(noisy) |
@@ -42,4 +42,4 @@
 - memory_limit=-1 은 OS 상한을 먼저 적용한 뒤 선택적으로 켜세요. RLIMIT_AS/RLIMIT_DATA 로 대체하지 마세요.
 - session.auto_start=0 은 session_start() 없이 $_SESSION 을 쓰는 페이지를 깨뜨릴 수 있습니다(출처: Xint).
 - 요청 형태 규칙은 문자셋 변형, RFC 2231/5987 인코딩, 대용량 본문으로 우회될 수 있습니다.
-- 각 파일의 검증 상태는 파일 머리말과 최종 보고를 확인하세요. 미검증 항목은 스테이징 시험이 필수입니다.
+- 각 파일의 검증 상태는 파일 머리말과 [verification.ko.md](../docs/verification.ko.md)를 확인하세요. 검증했더라도 한정된 환경(임시 VM·CI 러너)에서의 시험이므로 스테이징 시험이 필요하고, 미검증 항목(SELinux/AppArmor 메모 등)은 필수입니다.

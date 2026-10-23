@@ -441,4 +441,6 @@ echo "증거 경로: $EVID"
 | 증거 수집 스크립트 | debian:12 (apache2 포함) | 17개 파일과 `SHA256SUMS` 생성, 해시 검증 통과 |
 | `docker ps/images --format`, `docker exec ... php -v` | php:8.4.27-cli-alpine | 동작 |
 | Mermaid 플로차트 | - | 렌더링하지 않음(미검증) |
-| Windows PowerShell 명령, `kubectl`, `journalctl`, `coredumpctl`, `zgrep`, 메모리 수집, 호스트 방화벽 격리 | - | 미검증 |
+| `kubectl get pods -A -o jsonpath=...`, `kubectl cp/exec` 점검 | kind 클러스터 (GitHub Actions·로컬) | 동작 (`tests/k8s_check.sh`) |
+| 점검 도구가 만든 Windows 증거 보존 단계(`icacls`, `Get-Process`, `Get-NetTCPConnection`, `Get-FileHash`) | GitHub Actions `windows-latest` | 동작 (`tests/windows_iis_check.ps1`) |
+| 그 밖의 Windows PowerShell 명령(`Get-ChildItem C:\ -Recurse` 등), `journalctl`, `coredumpctl`, `zgrep`, 메모리 수집, 호스트 방화벽 격리 | - | 미검증 |

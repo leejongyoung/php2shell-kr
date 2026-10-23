@@ -34,7 +34,7 @@
 | PHP-FPM | pool 파일의 php_admin_* + systemd drop-in |
 | nginx | nginx 조각 (+ ModSecurity v3 사용 시 규칙) |
 | Apache | Apache 조각 (+ ModSecurity v2) |
-| IIS | `web.config.snippet.xml` 은 크기 상한만; `web.config.block-multipart.xml` 은 업로드 없음 선택 시에만 생성·적용 (미검증: IIS 환경 없음) |
+| IIS | `web.config.snippet.xml` 은 크기 상한만; `web.config.block-multipart.xml` 은 업로드 없음 선택 시에만 생성·적용 (Windows 러너의 IIS에서 검증: multipart 403·크기 상한 413·롤백, 정적 파일 대상 — `tests/windows_iis_check.ps1`) |
 | 컨테이너 | compose 하드닝 + 이미지 교체 |
 | 노출 감소 불가 + 완화 부족 | 서비스 중단 고려 |
 

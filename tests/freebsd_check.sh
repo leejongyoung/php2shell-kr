@@ -35,6 +35,7 @@ if service php_fpm onestart >/tmp/fpm-start.out 2>&1 || service php_fpm start >>
   sleep 3
   echo "--- service 출력"; cat /tmp/fpm-start.out; service php_fpm onestatus; sockstat -l 2>/dev/null | grep -i php
   echo "--- 진단: id=$(id -u) see_other_uids=$(sysctl -n security.bsd.see_other_uids 2>&1) jail=$(sysctl -n security.jail.jailed 2>&1)"; echo "pgrep:"; pgrep -l php 2>&1; echo "ps auxww:"; ps auxww 2>&1 | grep -i php | grep -v grep | cut -c1-160; echo "ps -ax 줄 수: $(ps -ax 2>&1 | wc -l)"; echo "--- ps (진단: 탐지 도구가 보는 프로세스 이름)"; echo "ps 출력 크기: $(ps -axo pid=,comm=,command= 2>&1 | wc -c) 바이트"; ps -axo pid=,comm=,command= 2>&1 | grep -i php | grep -v grep | cut -c1-200
+  echo "ps -axo 원문:"; ps -axo pid=,comm=,command= 2>&1 | head -12; echo "ps -axwwo command 만:"; ps -axwwo pid=,command= 2>&1 | grep -i php | head -5
   SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
   if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "실행 중인 php-fpm 을 running=true 로 찾음"; else fail "실행 중인 php-fpm 을 찾지 못함"; fi
   PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"

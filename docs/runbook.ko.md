@@ -89,7 +89,11 @@ for c in $(docker ps -q); do echo "== $c"; docker exec "$c" sh -c 'php -v 2>/dev
 docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep -i php
 ```
 - [검증] php:8.4.27-cli-alpine 컨테이너에서 `docker exec ... php -v`가 `PHP 8.4.27 (cli) (built: Oct 21 2026 ...)`를 출력했고, `docker ps --format`, `docker images --format`이 동작했습니다.
-- 쿠버네티스(`kubectl get pods -A -o jsonpath=...`로 이미지 목록 추출)는 미검증입니다. 이미지 이름에 `php`가 없어도 PHP가 들어 있을 수 있으므로(WordPress, Drupal 이미지 등), 이미지 태그 이름만으로 판단하지 마세요.
+- [검증] 쿠버네티스는 kind 클러스터(Kubernetes v1.37.0)에서 확인했습니다. 아래 명령이 모든 파드의 이미지를 나열했고, 취약 이미지(`php:8.4.26-fpm`)를 쓰는 파드가 목록에 보였습니다. 이미지 이름에 `php`가 없어도 PHP가 들어 있을 수 있으므로(WordPress, Drupal 이미지 등), 이미지 태그 이름만으로 판단하지 말고 파드 안에서 점검 스크립트를 실행하세요(재현: `tests/k8s_check.sh`).
+```bash
+kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\t"}{range .spec.containers[*]}{.image}{" "}{end}{"\n"}{end}'
+kubectl cp php2shell-quickcheck.sh NAMESPACE/POD:/tmp/q.sh && kubectl -n NAMESPACE exec POD -- sh /tmp/q.sh --json   # 취약이면 종료 코드 1, 수정됨이면 0
+```
 - 컨테이너 안 `php -v`는 CLI입니다. 웹 SAPI(php-fpm, apache)의 바이너리 버전도 확인하세요(`response-options.ko.md` 6.4절).
 
 Windows(미검증):

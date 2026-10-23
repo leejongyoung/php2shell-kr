@@ -324,14 +324,15 @@ docker image inspect php:8.4.27-fpm --format '{{.Id}}'     # 연결된 PC에서 
 - 공식 릴리스 tarball: [PHP 다운로드 페이지](https://www.php.net/downloads.php?source=Y)에서 받습니다. 페이지는 각 tarball의 SHA-256과 서명 링크를 제공합니다. **독립 채널**(다른 PC·다른 네트워크)에서 연 페이지의 해시와 대조하세요.
 ```bash
 sha256sum php-8.4.27.tar.xz              # 파일명은 받은 것에 맞춤
-# 서명: 릴리스 관리자 공개 키를 PHP 사이트의 GPG 키 페이지에서 독립 채널로 확보해 지문을 대조한 뒤
-gpg --import KEYS
+# 서명: 서명에 쓰인 키 ID 를 확인하고(gpg --verify 출력의 "using EDDSA key ..."), 그 전체 지문이 PHP 사이트의 GPG 키 페이지
+# (https://www.php.net/gpg-keys.php)에 있는지 독립 채널에서 대조한 뒤 공개 키를 가져온다
+curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x<전체 지문 40자>" | gpg --import    # 또는 키 페이지/KEYS 파일의 공개 키를 gpg --import
 gpg --verify php-8.4.27.tar.xz.asc php-8.4.27.tar.xz
 ```
-위 `gpg` 절차는 이 저장소에서 실행하지 못했습니다(미검증). 서명 파일 이름은 다운로드 페이지의 링크를 따르세요.
+[검증] 2026-10-23, `tests/gpg_source_check.sh`(임시 GNUPGHOME 사용): `php-8.4.27.tar.xz` 의 서명이 `Good signature` 였고(키 지문 `9D7F99A0CB8F05C8A6958D6256A97AF7600A39A6`, php.net 키 페이지에 있음), 파일에 1바이트를 덧붙이면 `BAD signature` 로 실패했습니다. `keys.openpgp.org` 에는 이 키가 없었고 `keyserver.ubuntu.com` 에서 받았습니다. 키를 받았다는 사실만으로 신뢰가 생기지 않으므로 지문 대조가 핵심입니다(`gpg` 가 "not certified with a trusted signature" 경고를 내는 것은 정상입니다).
 - 백포트 브랜치(Git)는 릴리스 tarball이 아닙니다. 연결된 PC에서 클론하고 `git log -1 --format=%H`의 커밋 해시를 독립 채널의 GitHub 웹 화면과 대조한 뒤, `git archive`나 디렉터리 전체의 `tar`로 묶어 해시를 만들어 옮깁니다.
   - 브랜치 주소: 7.4 `https://github.com/php/php-src/tree/PHP-7.4-CVE-2026-109618-109619`, 8.0 `.../tree/PHP-8.0-CVE-2026-109618-109619`, 8.1 `.../tree/PHP-8.1-CVE-2026-109618-109619` (PHP 공지).
-  - 8.1 브랜치 끝 커밋(`1d7dec17...`)은 GPG 서명이 있었으나(EDDSA 키 `259299AD4C7E1F40DE1302FF115CEA7A713E12E9`) 작업 환경에 공개 키가 없어 서명을 검증하지 못했습니다. 서명 키 지문도 독립 채널에서 확인하세요. 7.4, 8.0 브랜치의 서명은 확인하지 않았습니다.
+  - [검증] 2026-10-23 세 브랜치의 끝 커밋(7.4 `712e60f9...`, 8.0 `82f8f31b...`, 8.1 `1d7dec17...`)은 모두 같은 EDDSA 키 `259299AD4C7E1F40DE1302FF115CEA7A713E12E9`(커미터 Ilija Tovilo, GitHub `iluuu1994`)로 서명돼 있었고, 그 계정의 GitHub 공개 키(`https://github.com/iluuu1994.gpg`)를 가져와 `git verify-commit` 이 `Good signature` 를 냈습니다. **이 키의 지문은 php.net 키 페이지에 없었고 `keyserver.ubuntu.com` 에서도 찾지 못했습니다.** 따라서 이 검증은 "GitHub 계정의 키와 일치한다"까지이며, 지문 `2592 99AD 4C7E 1F40 DE13 02FF 115C EA7A 713E 12E9` 가 PHP 릴리스 관리자의 키가 맞는지는 독립 채널(PHP 보안팀·공식 공지)에서 따로 확인해야 합니다.
 
 ### 11.2 오프라인 빌드 의존성
 빌드 도구와 개발 헤더도 오프라인으로 옮겨야 합니다. 같은 방법으로 목록·해시를 만들고 같은 절차로 설치하세요. 검증된 최소 구성(debian:12: `git build-essential autoconf bison re2c pkg-config libxml2-dev libsqlite3-dev` 설치 후 `./buildconf --force`, `./configure --disable-all --enable-cli --enable-fpm`, `make`)의 결과는 [`response-options.ko.md`](response-options.ko.md) 8절을 보세요. 실제 운영 빌드는 쓰는 확장(openssl, curl, zlib, mbstring 등)의 개발 패키지가 더 필요하며, 필요한 목록은 현재 빌드의 `php -i | grep 'Configure Command'`로 알 수 있습니다.
@@ -361,7 +362,7 @@ apt-get --print-uris -y install build-essential autoconf bison re2c pkg-config l
 - Windows 전체 절차와 PowerShell 명령(컨테이너가 에뮬레이션으로 종료됨)
 - `apt-mirror`, `aptly`, `dnf reposync` 실제 미러 생성과 `file://` 저장소 구성
 - RHEL 모듈 스트림을 바꾸는 오프라인 설치
-- 소스 tarball의 `gpg --verify` 절차
+- 7.4/8.0/8.1 백포트 브랜치 서명 키(`2592 99AD ...`)가 PHP 릴리스 관리자의 키인지의 독립 확인(GitHub 계정 키와의 일치까지만 확인함)
 - 사내 Docker 레지스트리 push/pull, `docker load` 후 RepoDigests 유지 여부
 - 실제 수정 버전으로의 **교체**(검증 환경의 저장소 패키지가 이미 수정본이거나, 아직 수정본이 없었음)
-- systemd 서비스 재시작, 로드밸런서 롤링
+- 로드밸런서 롤링 (패키지 설치 후 `systemctl restart` 자체는 Ubuntu 24.04 호스트에서 확인함: `tests/linux_host_check.sh`)

@@ -4,7 +4,8 @@
 # 목적  : 웹 프로세스가 리버스 셸/외부 다운로드를 위해 새 연결을 만드는 것을 막는다.
 # 한계  : 취약점 자체를 막지 않는다. 예시이므로 그대로 적용하지 말 것. 허용 목록을
 #         빠뜨리면 DB/API/DNS 호출이 끊긴다. 허용 IP 는 문서용 주소(RFC 5737)다.
-# 상태  : 미검증(적용/문법 시험 안 함. `nft -c -f 파일` 로 사전 점검 권장).
+# 상태  : 검증(Ubuntu 24.04 호스트, tests/linux_host_check.sh): `nft -c -f` 문법 통과, `nft -f` 적용 후 www-data 의 신규 외부 연결(HTTPS)은
+#         막히고 root 의 외부 연결은 유지되며, `nft delete table inet php2shell_egress` 로 롤백된다. 허용 목록(DB·DNS) 동작은 시험하지 않았다.
 # 전제  : 웹 서버 프로세스가 웹 사용자(예: www-data)로 실행. meta skuid 는 해당 UID 를 사용.
 # 롤백  : `nft delete table inet php2shell_egress`
 # ============================================================================

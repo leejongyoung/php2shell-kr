@@ -151,7 +151,7 @@ docker build --pull --no-cache -t myapp:2026-10-23-php8.4.27 .
 docker run --rm myapp:2026-10-23-php8.4.27 php -v
 ```
 - Docker Compose를 쓰면 `docker compose build --pull --no-cache` 후 `docker compose up -d`(미검증).
-- Kubernetes는 새 이미지 태그로 매니페스트를 갱신해 롤아웃: `kubectl rollout status deployment/NAME`(미검증). 같은 태그를 덮어써 `rollout restart`만 하면 노드의 이미지 캐시 정책에 따라 옛 이미지를 쓸 수 있으므로 새 태그나 다이제스트 사용을 권장합니다.
+- Kubernetes는 새 이미지 태그로 매니페스트를 갱신해 롤아웃: `kubectl set image deployment/NAME CONTAINER=IMAGE:TAG` 후 `kubectl rollout status deployment/NAME`. [검증] kind 클러스터에서 `php:8.4.26-fpm` → `8.4.27-fpm` 롤아웃이 성공했고, 옛 파드가 삭제된 뒤 새 파드에서 점검 스크립트가 취약(종료 코드 1) → 수정됨(0)으로 바뀌는 것을 확인했습니다(`tests/k8s_check.sh`). 같은 태그를 덮어써 `rollout restart`만 하면 노드의 이미지 캐시 정책에 따라 옛 이미지를 쓸 수 있다는 점은 시험하지 않았으므로 새 태그나 다이제스트 사용을 권장합니다.
 - 이미지 안의 PHP 설정(`conf.d`의 ini)도 이미지에 포함합니다(Xint: 컨테이너는 이미지의 `conf.d`에 ini 추가 후 재빌드·재배포).
 
 **장점**: 재현 가능, 롤링 배포 쉬움. **단점**: 파생 이미지가 여러 겹이면 모두 재빌드해야 함. 오래된 베이스 이미지(예: 7.x, 8.0, 8.1)는 공식 이미지 수정이 없음.
@@ -457,7 +457,8 @@ docker exec CONTAINER sh -c 'php-fpm -v || apache2ctl -v'  # 웹 SAPI 바이너�
 
 debian:12(aarch64)에서 `git ls-remote`로 세 백포트 브랜치가 존재함을 확인했습니다(`PHP-7.4-...`, `PHP-8.0-...`, `PHP-8.1-...` + `-CVE-2026-109618-109619`). 8.1 브랜치를 `git clone --depth 1`로 받아 다음을 실행해 모두 성공했습니다.
 
-- 브랜치 끝 커밋: `1d7dec178a094e6e75b229ce22754045f8c6070a` "Avoid state corruption via bailout"(작성자 Arnaud Le Blanc, 2026-10-18). `git log --show-signature`는 서명이 있음(EDDSA 키 `259299AD4C7E1F40DE1302FF115CEA7A713E12E9`)을 보였지만 공개 키가 없어 **서명을 검증하지는 못했습니다.** 커밋 해시와 서명 키 지문은 독립 채널에서 확인하세요.
+- 브랜치 끝 커밋: `1d7dec178a094e6e75b229ce22754045f8c6070a` "Avoid state corruption via bailout"(작성자 Arnaud Le Blanc, 2026-10-18, 커미터 Ilija Tovilo). `git log --show-signature`는 서명이 있음(EDDSA 키 `259299AD4C7E1F40DE1302FF115CEA7A713E12E9`)을 보였고, 커미터의 GitHub 공개 키를 가져오면 `Good signature` 였습니다. 다만 이 키 지문은 php.net 키 페이지에 없으므로 **PHP 릴리스 관리자의 키인지는 독립 채널에서 확인하세요**([`offline-patching.ko.md`](offline-patching.ko.md) 11.1절).
 - `main/php_version.h`의 `PHP_VERSION`은 `8.1.34`.
 - 설치한 의존성: `git build-essential autoconf bison re2c pkg-config libxml2-dev libsqlite3-dev ca-certificates`. `./buildconf --force`, `./configure --disable-all --enable-cli --enable-fpm --prefix=/opt/php81`, `make -j4` 성공, `./sapi/cli/php -v` 출력 `PHP 8.1.34 (cli) (built: Oct 23 2026 ...) (NTS)`.
-- 이 빌드는 확장이 없는 최소 구성입니다. `make test`, 7.4/8.0 브랜치 빌드, 운영 확장 포함 빌드는 하지 않았습니다(미검증). 이 빌드의 버전 번호(8.1.34)만으로는 수정 여부를 알 수 없으므로, 백포트 브랜치의 커밋이 수정을 포함한다는 사실은 PHP 공지에 의존합니다.
+- 이 빌드는 확장이 없는 최소 구성입니다. `make test`, 운영 확장 포함 빌드는 하지 않았습니다(미검증). 이 빌드의 버전 번호(8.1.34)만으로는 수정 여부를 알 수 없으므로, 백포트 브랜치의 커밋이 수정을 포함한다는 사실은 PHP 공지에 의존합니다.
+- 7.4, 8.0 브랜치도 같은 최소 구성으로 debian:12에서 빌드되어 실행됐습니다(CLI `7.4.34-dev`, `8.0.30`, `php-fpm -v` 출력 포함. GitHub Actions 3개 잡 성공, 재현: `sh tests/backport_build_check.sh 7.4 8.0 8.1`). 7.4는 개발판 번호(`-dev`)로 표시되며 8.1은 `8.1.34`입니다.

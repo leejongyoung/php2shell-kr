@@ -1,0 +1,21 @@
+name: iis-rule-diag
+
+# 임시 진단용: IIS URL Rewrite 규칙이 multipart 요청을 왜 못 막는지 확인한다. 원인을 찾으면 삭제한다.
+on:
+  push:
+    paths:
+      - tests/windows_iis_rule_diag.ps1
+      - .github/workflows/iis-rule-diag.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        run: ./tests/windows_iis_rule_diag.ps1

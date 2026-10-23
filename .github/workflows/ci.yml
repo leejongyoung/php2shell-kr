@@ -1,0 +1,153 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.8", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s tests -v
+
+  python36:
+    name: unit (python 3.6 container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD:/r" -w /r python:3.6 python -m unittest discover -s tests -v
+
+  sh-linux:
+    name: sh quickcheck (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12-slim", "ubuntu:24.04", "alpine:3.20", "rockylinux:9-minimal", "almalinux:9-minimal", "opensuse/leap:15.6"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD:/r:ro" "${{ matrix.image }}" sh /r/tests/test_quickcheck_sh.sh
+
+  sh-macos:
+    name: sh quickcheck (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh tests/test_quickcheck_sh.sh
+
+  powershell:
+    name: powershell (${{ matrix.os }}, ${{ matrix.shell }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, shell: powershell }   # Windows PowerShell 5.1
+          - { os: windows-latest, shell: pwsh }         # PowerShell 7
+          - { os: ubuntu-latest, shell: pwsh }
+          - { os: macos-latest, shell: pwsh }
+    steps:
+      - uses: actions/checkout@v4
+      - name: harness
+        shell: ${{ matrix.shell }}
+        run: ./tests/test_quickcheck_ps1.ps1
+
+  real-php-linux:
+    name: real PHP images and distro packages (docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python tests/platform_matrix.py --json platform-matrix.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-matrix
+          path: platform-matrix.json
+
+  real-php-windows:
+    name: real PHP on Windows (vulnerable and fixed builds)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: build dist
+        run: python tools/build_dist.py --out dist
+      - name: install vulnerable (8.4.26) and fixed (8.4.27) PHP builds
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest "https://windows.php.net/downloads/releases/archives/php-8.4.26-nts-Win32-vs17-x64.zip" -OutFile vuln.zip
+          Invoke-WebRequest "https://windows.php.net/downloads/releases/php-8.4.27-nts-Win32-vs17-x64.zip" -OutFile fixed.zip
+          Expand-Archive vuln.zip -DestinationPath C:\php-vulnerable
+          Expand-Archive fixed.zip -DestinationPath C:\php-fixed
+          & C:\php-vulnerable\php.exe -n -v
+          & C:\php-fixed\php.exe -n -v
+      - name: bat (single file) finds both and classifies them
+        shell: pwsh
+        env:
+          P2S_NOPAUSE: "1"
+        run: |
+          $bat = (Resolve-Path dist\php2shell-triage-*\php2shell-quickcheck.bat).Path
+          $json = & cmd.exe /c "`"$bat`" -Json"
+          $code = $LASTEXITCODE
+          Write-Host $json
+          $data = ($json -join "`n") | ConvertFrom-Json
+          $rows = @($data.installations | Where-Object { $_.path -like 'C:\php-*' })
+          $vuln = @($rows | Where-Object { $_.path -like 'C:\php-vulnerable*' -and $_.verdict -eq 'vulnerable' -and $_.version -like '8.4.26*' })
+          $fixed = @($rows | Where-Object { $_.path -like 'C:\php-fixed*' -and $_.verdict -eq 'fixed' -and $_.version -like '8.4.27*' })
+          if ($vuln.Count -lt 1) { throw "vulnerable build was not detected" }
+          if ($fixed.Count -lt 1) { throw "fixed build was not detected" }
+          if ($code -ne 1) { throw "expected exit code 1, got $code" }
+      - name: python tool agrees
+        shell: pwsh
+        run: |
+          $json = python php2shell_triage.py --json --no-response
+          $data = ($json -join "`n") | ConvertFrom-Json
+          $vuln = @($data.installations | Where-Object { $_.path -like 'C:\php-vulnerable*' -and $_.verdict -eq 'vulnerable' })
+          $fixed = @($data.installations | Where-Object { $_.path -like 'C:\php-fixed*' -and $_.verdict -eq 'fixed' })
+          if ($vuln.Count -lt 1 -or $fixed.Count -lt 1) { throw "python tool did not classify the Windows builds" }
+      - name: patch plan for Windows is generated and parses
+        shell: pwsh
+        run: |
+          python php2shell_triage.py --no-response --emit-patch-plan plan --plan-format ps1 | Out-Null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path plan\patch-plan.ps1).Path, [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_.Message }; throw "generated plan has syntax errors" }
+          $env:PHP2SHELL_I_REVIEWED = ""
+          & pwsh -NoProfile -File plan\patch-plan.ps1
+          if ($LASTEXITCODE -ne 64) { throw "guard did not stop the plan (exit $LASTEXITCODE)" }
+
+  dist:
+    name: dist bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python tools/build_dist.py --out dist
+      - name: verify checksums
+        run: cd dist/php2shell-triage-* && sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*.zip

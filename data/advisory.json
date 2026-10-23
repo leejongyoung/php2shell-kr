@@ -1,0 +1,49 @@
+{
+  "name": "PHP2Shell",
+  "cves": ["CVE-2026-109618", "CVE-2026-109619"],
+  "cvss_v4": 9.2,
+  "as_of": "2026-10-23",
+  "summary_ko": "PHP 엔진의 메모리 안전성 결함으로 인증 없이 원격 코드 실행과 프로세스 메모리 노출이 가능합니다. 웹 요청을 처리하는 모든 SAPI(mod_php, PHP-FPM, php-cgi, FrankenPHP, LiteSpeed)가 해당합니다.",
+  "affected_range": "5.4 - 8.5 (8.6.0 RC3 이하 포함)",
+  "fixed_releases": {
+    "8.2": "8.2.35",
+    "8.3": "8.3.36",
+    "8.4": "8.4.27",
+    "8.5": "8.5.12",
+    "8.6": "8.6.0RC4"
+  },
+  "affected_no_official_fix": {
+    "eol_no_fix_branches": ["5.4", "5.5", "5.6", "7.0", "7.1", "7.2", "7.3"],
+    "source_backport_only_branches": ["7.4", "8.0", "8.1"]
+  },
+  "source_backport_urls": {
+    "7.4": "https://github.com/php/php-src/tree/PHP-7.4-CVE-2026-109618-109619",
+    "8.0": "https://github.com/php/php-src/tree/PHP-8.0-CVE-2026-109618-109619",
+    "8.1": "https://github.com/php/php-src/tree/PHP-8.1-CVE-2026-109618-109619"
+  },
+  "security_support_ends": {
+    "8.2": "2026-12-31"
+  },
+  "first_exploitation_observed": "2026-10-17",
+  "log_review_since_default": "2026-10-17",
+  "vendor_patch_evidence_cves": ["CVE-2026-109618", "CVE-2026-109619"],
+  "interim_mitigation": {
+    "note_ko": "임시 조치는 일부 공격 경로만 줄이며 완전한 해결이 아닙니다. 업데이트만이 근본 조치입니다.",
+    "settings": [
+      {"key": "session.upload_progress.enabled", "value": "0", "applies_to": ["fpm", "cgi", "apache"], "admin_only": true},
+      {"key": "memory_limit", "value": "-1", "applies_to": ["fpm", "cgi", "apache"], "admin_only": true, "warning_ko": "메모리 상한이 없어지므로 컨테이너·cgroup·systemd MemoryMax 등 OS 수준 상한을 함께 설정해야 합니다. RLIMIT_AS/RLIMIT_DATA는 쓰지 마세요."},
+      {"key": "session.auto_start", "value": "0", "applies_to": ["fpm", "cgi", "apache"], "admin_only": true, "source": "Xint", "warning_ko": "session_start()를 호출하지 않는 페이지의 세션 기능이 멈출 수 있습니다."},
+      {"key": "post_max_size", "value": "8M", "applies_to": ["fpm", "cgi", "apache"], "admin_only": false, "note_ko": "업로드가 필요 없으면 8M, 필요하면 32M 수준. upload_max_filesize는 post_max_size보다 작게 유지."},
+      {"key": "fatal_error_backtraces", "value": "0", "applies_to": ["fpm", "cgi", "apache"], "admin_only": false, "only_branches": ["8.5"]}
+    ]
+  },
+  "sources": [
+    {"id": "php-official", "title": "PHP.net Security advisory: Critical remote code execution vulnerabilities, update now", "url": "https://www.php.net/archive/2026.php#2026-10-21-5", "fetched": "2026-10-23"},
+    {"id": "ghsa-109618", "title": "GHSA-w8hw-w9fx-j79w (CVE-2026-109618)", "url": "https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w", "fetched": "2026-10-23"},
+    {"id": "ghsa-109619", "title": "GHSA-6wmf-4rv5-p3rp (CVE-2026-109619)", "url": "https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp", "fetched": "2026-10-23"},
+    {"id": "kisa", "title": "KISA 보호나라: PHP 보안취약점(PHP2Shell) 관련 기업 보안 대응 수칙 (2026-10-22)", "url": "https://www.boho.or.kr/kr/bbs/view.do?bbsId=B0000133&menuNo=205020&nttId=72230", "fetched": "2026-10-23"},
+    {"id": "ncsc-nl", "title": "NCSC-NL/CERT-EU php2shell operational information", "url": "https://github.com/NCSC-NL/php2shell", "fetched": "2026-10-23"},
+    {"id": "sysdig", "title": "Sysdig: PHP2Shell detection and recommendations", "url": "https://www.sysdig.com/blog/php2shell-cve-2026-109618-and-cve-2026-109619-detecting-unauthenticated-remote-code-execution-in-php-core", "fetched": "2026-10-23"},
+    {"id": "xint", "title": "Xint: PHP2Shell 긴급 대응 방안", "url": "https://xint.io/ko/blog/php2shell-vulnerability-emergency-response", "fetched": "2026-10-23"}
+  ]
+}

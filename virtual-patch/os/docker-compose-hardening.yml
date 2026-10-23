@@ -1,0 +1,31 @@
+# ============================================================================
+# PHP2Shell 임시 완화: Docker Compose 하드닝 예시 (php-fpm 서비스)
+# ----------------------------------------------------------------------------
+# 목적    : memory_limit=-1 의 OS 수준 상한(mem_limit)과 침해 후 피해 축소(읽기 전용
+#           rootfs, 권한 제거, 외부 통신 차단).
+# 한계    : 취약점 자체를 막지 않는다. 이미지 교체(패치 버전) 전까지의 완화일 뿐이다.
+#           RLIMIT_AS/RLIMIT_DATA(ulimits as/data)는 쓰지 말 것.
+# 적용 전 : 예시이므로 이미지/볼륨/네트워크 이름을 환경에 맞게 수정. `docker compose config` 로 확인.
+#           read_only 로 앱이 쓰는 경로(세션, 업로드)는 tmpfs/볼륨이 필요하다.
+# 롤백    : 이 항목들을 제거하고 `docker compose up -d`.
+# ============================================================================
+services:
+  php:
+    image: php:8.4-fpm
+    mem_limit: 1g
+    memswap_limit: 1g
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/lib/php/sessions:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+networks:
+  backend:
+    # internal: true 이면 외부(인터넷)로 나가는 연결이 차단된다. DB 등 내부 통신만 가능.
+    internal: true

@@ -1,0 +1,8 @@
+php2shell-triage
+Copyright 2026 Lee Jongyoung
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This is a defensive toolkit. It contains no exploit code. It is not an official
+tool of KISA, PHP, or any government agency; advisory facts are summarized from the
+public sources listed in data/advisory.json.

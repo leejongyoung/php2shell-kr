@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+*.egg-info/
+.venv/
+# 점검 결과·증거·계획 산출물은 서버별 민감 정보를 담을 수 있으니 저장소에 올리지 않습니다.
+php2shell-evidence-*/
+php2shell-work-*/
+patch-plan.*
+*.local.json

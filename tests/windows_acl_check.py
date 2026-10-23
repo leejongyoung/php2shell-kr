@@ -66,9 +66,13 @@ def diagnose(path):
         "foreach ($r in $a.Access) { $s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; "
         "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11')) { Write-Output ('    {0} {1} rights=0x{2:X} prop={3} inh={4}' -f $s, $r.AccessControlType, [int]$r.FileSystemRights, $r.PropagationFlags, $r.InheritanceFlags) } }; "
         "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n; $d++ }")
-    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-    print("--- diagnose %s\n%s" % (path, result.stdout.strip()))
+    root = p.windows_systemroot()
+    environments = (("도구와 같은 최소 환경", {"SystemRoot": root, "PATH": os.path.join(root, "System32")}),
+                    ("상속 환경", None))
+    for label, env in environments:
+        result = subprocess.run([p.helper_path("powershell"), "-NoProfile", "-NonInteractive", "-Command", script],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, env=env)
+        print("--- diagnose %s [%s] rc=%d\n%s" % (path, label, result.returncode, result.stdout.strip()[:3000]))
 
 shutil.rmtree(BASE, ignore_errors=True)
 os.makedirs(BASE)

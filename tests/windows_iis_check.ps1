@@ -41,7 +41,7 @@ function Wait-Post([string]$Url, [scriptblock]$MakeContent, [int]$Expected, [int
 function Multipart-Content {
     $c = New-Object System.Net.Http.MultipartFormDataContent
     $c.Add((New-Object System.Net.Http.StringContent('a')), 'f')
-    return $c
+    return ,$c   # the comma keeps PowerShell from unrolling the IEnumerable MultipartFormDataContent into its parts (which sent a plain text/plain body)
 }
 function Form-Content([int]$Bytes) {
     return New-Object System.Net.Http.StringContent(('a=' + ('b' * $Bytes)), [Text.Encoding]::ASCII, 'application/x-www-form-urlencoded')
@@ -116,9 +116,17 @@ if (Test-Path $phpCgi) {
     $before = Get-Process php-cgi -ErrorAction SilentlyContinue | Select-Object -First 1
     Check ($null -ne $before) 'php-cgi.exe is running under IIS'
 
-    $json = python "$Repo\php2shell_triage.py" --json --no-response | Out-String
-    $data = $json | ConvertFrom-Json
-    $row = @($data.installations | Where-Object { $_.path -like "$PhpDir*php-cgi.exe" -and $_.running })
+    $row = @()
+    foreach ($attempt in 1..3) {
+        $json = python "$Repo\php2shell_triage.py" --json --no-response | Out-String
+        $data = $json | ConvertFrom-Json
+        $row = @($data.installations | Where-Object { $_.path -like "$PhpDir*php-cgi.exe" -and $_.running })
+        if ($row.Count -ge 1) { break }
+        Write-Host "  attempt $attempt did not see a running php-cgi.exe; php processes now:"
+        Get-CimInstance Win32_Process -Filter "Name like 'php%'" | Select-Object ProcessId, Name, ExecutablePath | Format-Table | Out-String | Write-Host
+        Write-Host ("  tool rows: " + (($data.installations | ForEach-Object { "$($_.path) running=$($_.running) pids=$($_.pids -join ',')" }) -join ' | ') + "; visibility=$($data.process_visibility)")
+        Start-Sleep -Seconds 3
+    }
     Check ($row.Count -ge 1) 'tool reports the IIS-hosted php-cgi.exe as running'
     if ($row.Count -ge 1) { Write-Host ("  pids: " + ($row[0].pids -join ',')) }
 

@@ -32,7 +32,8 @@ if pkg upgrade -n -g 'php*' >/tmp/pkg-up.out 2>&1; then pass "pkg upgrade -n -g 
 
 sysrc php_fpm_enable=YES >/dev/null
 if service php_fpm onestart >/tmp/fpm-start.out 2>&1 || service php_fpm start >>/tmp/fpm-start.out 2>&1; then
-  sleep 2
+  sleep 3
+  echo "--- service 출력"; cat /tmp/fpm-start.out; service php_fpm onestatus; sockstat -l 2>/dev/null | grep -i php
   echo "--- ps (진단: 탐지 도구가 보는 프로세스 이름)"; ps -axo pid=,comm=,command= | grep -i php | grep -v grep | cut -c1-200
   SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
   if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "실행 중인 php-fpm 을 running=true 로 찾음"; else fail "실행 중인 php-fpm 을 찾지 못함"; fi

@@ -238,6 +238,39 @@ class ScanFixtures(unittest.TestCase):
         self.assertFalse(run(["2", "4"]))
         self.assertTrue(run(["2", "3", "4"]))
 
+    def test_ps_finds_php_fpm_processes_whose_title_was_rewritten(self):
+        """macOS/BSD 의 php-fpm 은 제목을 'php-fpm: master process (...)' 로 바꾼다. 실행 파일은 lsof/procstat 로 찾는다 (running=false 로 보이던 결함)."""
+        listing = ("  100 /usr/sbin/sshd -D\n"
+                   " 5165 php-fpm: master process (/opt/homebrew/etc/php/8.5/php-fpm.conf)\n"
+                   " 5175 php-fpm: pool www\n"
+                   " 5176 /usr/local/bin/php-cgi -b 127.0.0.1:9000\n")
+
+        def fake_run(cmd, timeout=6, pass_fds=()):
+            if cmd[0] == "ps":
+                return 0, listing
+            return 0, "p%s\nftxt\nn/opt/homebrew/Cellar/php/8.5.11_1/sbin/php-fpm\n" % cmd[3]
+
+        with mock.patch.object(triage, "run", fake_run), \
+                mock.patch.object(triage, "helper_path", lambda name: "/usr/sbin/" + name if name == "lsof" else None), \
+                mock.patch.object(triage.platform, "system", lambda: "Darwin"):
+            processes, unresolved = triage.ps_processes()
+        self.assertFalse(unresolved)
+        self.assertEqual(sorted((p["pid"], p["exe"]) for p in processes),
+                         [(5165, "/opt/homebrew/Cellar/php/8.5.11_1/sbin/php-fpm"),
+                          (5175, "/opt/homebrew/Cellar/php/8.5.11_1/sbin/php-fpm"),
+                          (5176, "/usr/local/bin/php-cgi")])
+
+    def test_ps_reports_limited_visibility_when_title_process_exe_is_unknown(self):
+        def fake_run(cmd, timeout=6, pass_fds=()):
+            return (0, " 5165 php-fpm: master process (/etc/php-fpm.conf)\n") if cmd[0] == "ps" else (1, "")
+
+        with mock.patch.object(triage, "run", fake_run), \
+                mock.patch.object(triage, "helper_path", lambda name: None), \
+                mock.patch.object(triage.platform, "system", lambda: "Darwin"):
+            processes, unresolved = triage.ps_processes()
+        self.assertEqual(processes, [])
+        self.assertTrue(unresolved)
+
 
 class BinaryStringVersion(unittest.TestCase):
     @POSIX

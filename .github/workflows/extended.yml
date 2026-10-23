@@ -99,7 +99,11 @@ jobs:
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest "https://windows.php.net/downloads/releases/php-8.4.27-nts-Win32-vs17-x64.zip" -OutFile fixed.zip
+          # windows.php.net 이 연결을 끊는 경우가 있어 3회까지 재시도한다 (해시는 그대로 검증)
+          foreach ($try in 1..3) {
+            try { Invoke-WebRequest "https://windows.php.net/downloads/releases/php-8.4.27-nts-Win32-vs17-x64.zip" -OutFile fixed.zip; break }
+            catch { if ($try -eq 3) { throw }; Start-Sleep -Seconds (5 * $try) }
+          }
           if ((Get-FileHash fixed.zip -Algorithm SHA256).Hash.ToLower() -ne '93bd8a815a52156606fb906d0573437908c61f96e2cc52c03a51e36a41bf5236') { throw 'fixed.zip checksum mismatch' }
           Expand-Archive fixed.zip -DestinationPath C:\php-fixed
       - name: real ACL trust decisions

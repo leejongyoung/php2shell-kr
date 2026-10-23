@@ -789,23 +789,48 @@ def linux_processes():
     return processes, denied > 0
 
 
+def ps_exe_for_pid(pid):
+    """프로세스 제목이 바뀐 PHP(php-fpm: master process ...)의 실제 실행 파일 경로. FreeBSD 는 procstat, macOS 는 lsof."""
+    if helper_path("procstat"):
+        code, out = run([helper_path("procstat"), "-b", str(pid)], timeout=10)
+        lines = out.splitlines() if code == 0 else []
+        if len(lines) >= 2 and lines[1].split() and lines[1].split()[-1].startswith("/"):
+            return lines[1].split()[-1]
+    elif platform.system() == "Darwin" and helper_path("lsof"):
+        code, out = run([helper_path("lsof"), "-a", "-p", str(pid), "-d", "txt", "-Fn"], timeout=10)
+        for line in (out.splitlines() if code == 0 else []):
+            if line.startswith("n/"):
+                return line[1:]
+    return None
+
+
 def ps_processes():
-    """macOS/BSD: ps 로 PHP 프로세스를 찾는다."""
+    """macOS/BSD: ps 로 PHP 프로세스를 찾는다. 반환: (processes, 일부 프로세스의 실행 파일을 알 수 없었는지)."""
     code, out = run(["ps", "-axo", "pid=,command="])
     processes = []
     if code is None:
         return processes, True
+    unresolved = False
     for line in out.splitlines():
         parts = line.strip().split(None, 1)
         if len(parts) < 2 or not parts[0].isdigit():
             continue
         command = parts[1]
-        exe = command.split(" ", 1)[0] if command.startswith("/") else None
-        label = os.path.basename(exe) if exe else command.split(" ", 1)[0]
+        first = command.split(" ", 1)[0]
+        exe = first if command.startswith("/") else None
+        label = os.path.basename(exe) if exe else first
+        if not exe and label.endswith(":"):
+            # php-fpm 은 setproctitle 로 "php-fpm: master process (설정)" / "php-fpm: pool www" 처럼 제목을 바꾼다
+            label = label[:-1]
+            if _PHP_EXE_RE.match(label):
+                exe = ps_exe_for_pid(int(parts[0]))
+                if not exe:
+                    unresolved = True
+                    continue
         if _PHP_EXE_RE.match(label) and exe:
             processes.append({"pid": int(parts[0]), "exe": exe, "deleted": False, "kind": "php",
                               "module": None, "start": None, "unit": None})
-    return processes, False
+    return processes, unresolved
 
 
 def windows_processes():

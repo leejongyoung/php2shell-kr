@@ -564,15 +564,23 @@ disc_procs() {
         PROC_ENUM=1
         while read -r dp_pid dp_path <&3; do
           case $dp_pid in ''|*[!0-9]*) continue ;; esac
+          # php-fpm 은 프로세스 제목을 "php-fpm: master process (설정 파일)" 로 바꾼다(macOS 의 ps 가 그대로 보여 준다): 이름만 남긴다
+          case $dp_path in
+            php-fpm:*|lsphp:*) dp_path=${dp_path%%:*} ;;
+          esac
           dp_base=${dp_path##*/}
           proc_match_bin "$dp_base" || continue
           dp_exe=$dp_path
           case $dp_exe in
             /*) ;;
             *)
+              dp_found=""
               if command -v procstat >/dev/null 2>&1; then
-                dp_exe=$(procstat -b "$dp_pid" 2>/dev/null | awk 'NR == 2 {print $NF}')
-              fi ;;
+                dp_found=$(procstat -b "$dp_pid" 2>/dev/null | awk 'NR == 2 {print $NF}')
+              elif [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v lsof >/dev/null 2>&1; then
+                dp_found=$(lsof -a -p "$dp_pid" -d txt -Fn 2>/dev/null | awk '/^n\// { print substr($0, 2); exit }')
+              fi
+              case $dp_found in /*) dp_exe=$dp_found ;; esac ;;
           esac
           add_proc "$dp_pid" "$dp_exe" 0 0 "" "$dp_base"
         done 3< "$TMPD/ps.txt"

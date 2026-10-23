@@ -37,6 +37,7 @@ else
   FPM_PID=$!
   sleep 3
 fi
+echo "--- ps (진단: 탐지 도구가 보는 프로세스 이름)"; ps -axo pid=,comm=,command= | grep -i php | grep -v grep | cut -c1-200
 SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
 PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
 if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "sh 판이 실행 중인 php-fpm 을 running=true 로 찾음"; else fail "sh 판이 실행 중인 php-fpm 을 찾지 못함"; fi

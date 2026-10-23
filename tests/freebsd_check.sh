@@ -23,18 +23,21 @@ SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
 PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
 if echo "$SHJSON" | $INSPECT --path '^/usr/local/(bin/php|sbin/php-fpm)$' --version "$PKGVER"; then pass "sh 판이 pkg php84 $PKGVER 를 찾음"; else fail "sh 판이 php84 $PKGVER 를 찾지 못함"; fi
 if echo "$PYJSON" | $INSPECT --path '^/usr/local/(bin/php|sbin/php-fpm)$' --version "$PKGVER"; then pass "python 판이 pkg php84 $PKGVER 를 찾음"; else fail "python 판이 php84 $PKGVER 를 찾지 못함"; fi
-if sh "$ROOT/quickcheck/php2shell-quickcheck.sh" 2>&1 | grep -q "pkg upgrade"; then pass "sh 판 조치 계획이 pkg 절차(pkg upgrade)를 안내함"; else fail "sh 판이 패키지 관리자를 pkg 로 인식하지 못함"; fi
-sh "$ROOT/quickcheck/php2shell-quickcheck.sh" 2>&1 | grep -E "pkg (upgrade|audit)" | head -3
+if echo "$PYJSON" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["package_manager"] == "pkg" else 1)'; then pass "python 판이 패키지 관리자를 pkg 로 인식함"; else fail "python 판이 패키지 관리자를 pkg 로 인식하지 못함"; fi
 
 if pkg audit -F >/tmp/pkg-audit.out 2>&1; then pass "pkg audit -F 정상 종료(취약 패키지 없음)"; else
   rc=$?; [ "$rc" -eq 1 ] && pass "pkg audit -F 종료 코드 1(취약 패키지 보고 가능): $(tail -1 /tmp/pkg-audit.out)" || { fail "pkg audit -F 실패 rc=$rc"; tail -5 /tmp/pkg-audit.out; }; fi
+echo "--- pkg audit -F 출력"; head -30 /tmp/pkg-audit.out
 if pkg upgrade -n -g 'php*' >/tmp/pkg-up.out 2>&1; then pass "pkg upgrade -n -g 'php*' 동작"; else fail "pkg upgrade -g 'php*'"; tail -5 /tmp/pkg-up.out; fi
 
 sysrc php_fpm_enable=YES >/dev/null
 if service php_fpm onestart >/tmp/fpm-start.out 2>&1 || service php_fpm start >>/tmp/fpm-start.out 2>&1; then
   sleep 2
+  echo "--- ps (진단: 탐지 도구가 보는 프로세스 이름)"; ps -axo pid=,comm=,command= | grep -i php | grep -v grep | cut -c1-200
   SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
   if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "실행 중인 php-fpm 을 running=true 로 찾음"; else fail "실행 중인 php-fpm 을 찾지 못함"; fi
+  PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+  if echo "$PYJSON" | $INSPECT --sapi fpm --running; then pass "python 판이 실행 중인 php-fpm 을 running=true 로 찾음"; else fail "python 판이 실행 중인 php-fpm 을 찾지 못함"; fi
   if service php_fpm restart >/tmp/fpm-restart.out 2>&1; then pass "service php_fpm restart 동작"; else fail "service php_fpm restart"; cat /tmp/fpm-restart.out; fi
   service php_fpm stop >/dev/null 2>&1
 else

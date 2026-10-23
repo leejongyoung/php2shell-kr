@@ -40,8 +40,19 @@ MM="$(systemctl show -p MemoryMax --value "$UNIT")"
 # 2) 재시작 필요 탐지
 PKG="$(dpkg -S "$(command -v "${UNIT%.service}" 2>/dev/null || ls /usr/sbin/php-fpm* | head -1)" 2>/dev/null | head -1 | cut -d: -f1)"
 echo "패키지: $PKG"
+BEFORE_PID="$(systemctl show -p MainPID --value "$UNIT")"
 apt-get install -y -qq --reinstall "$PKG" >/dev/null 2>&1 || fail "$PKG 재설치"
 rm -f /usr/sbin/policy-rc.d
+AFTER_PID="$(systemctl show -p MainPID --value "$UNIT")"
+EXE_LINK="$(readlink "/proc/$AFTER_PID/exe" 2>/dev/null)"
+echo "정보: 재설치 전 MainPID=$BEFORE_PID, 후 MainPID=$AFTER_PID, /proc/<pid>/exe -> $EXE_LINK"
+case "$EXE_LINK" in
+  *"(deleted)") pass "apt 재설치가 실행 중인 서비스의 바이너리를 교체함(프로세스는 삭제된 옛 파일을 사용 중)" ;;
+  *)
+    echo "정보: apt 재설치로 (deleted) 상태가 만들어지지 않음 (서비스 재시작 여부 또는 파일 교체 방식 차이). 패키지 갱신과 같은 효과(새 파일을 rename 으로 덮어쓰기)로 대체한다"
+    BIN="$(readlink -f "/proc/$AFTER_PID/exe")"
+    cp -p "$BIN" "$BIN.new" && mv "$BIN.new" "$BIN" ;;
+esac
 INSPECT="python3 $ROOT/tests/_inspect_json.py"
 JSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
 if echo "$JSON" | $INSPECT --sapi fpm --running --needs-restart; then

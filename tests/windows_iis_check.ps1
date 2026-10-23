@@ -47,9 +47,10 @@ python "$Repo\php2shell_triage.py" --emit-virtual-patch $out --uploads no 2>&1 |
 $rule = [xml](Get-Content (Join-Path $out 'iis\web.config.block-multipart.xml') -Raw -Encoding UTF8)
 $snip = [xml](Get-Content (Join-Path $out 'iis\web.config.snippet.xml') -Raw -Encoding UTF8)
 $merged = [xml]'<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer/></configuration>'
+$target = $merged.SelectSingleNode('/configuration/system.webServer')
 foreach ($doc in @($rule, $snip)) {
-    foreach ($node in $doc.configuration.'system.webServer'.ChildNodes) {
-        [void]$merged.configuration.'system.webServer'.AppendChild($merged.ImportNode($node, $true))
+    foreach ($node in @($doc.SelectSingleNode('/configuration/system.webServer').ChildNodes)) {
+        [void]$target.AppendChild($merged.ImportNode($node, $true))
     }
 }
 $webConfig = Join-Path $wwwroot 'web.config'

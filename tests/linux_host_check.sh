@@ -42,15 +42,20 @@ PKG="$(dpkg -S "$(command -v "${UNIT%.service}" 2>/dev/null || ls /usr/sbin/php-
 echo "패키지: $PKG"
 apt-get install -y -qq --reinstall "$PKG" >/dev/null 2>&1 || fail "$PKG 재설치"
 rm -f /usr/sbin/policy-rc.d
+INSPECT="python3 $ROOT/tests/_inspect_json.py"
 JSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
-if echo "$JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(i["needs_restart"] and i["running"] for i in d["installations"]) else 1)'; then
+if echo "$JSON" | $INSPECT --sapi fpm --running --needs-restart; then
   pass "패키지 파일 교체 후 도구가 재시작 필요를 보고"
 else
-  fail "재시작 필요를 탐지하지 못함"; echo "$JSON" | head -c 1500
+  fail "재시작 필요를 탐지하지 못함"
 fi
+# 점검 도구가 root 로 실행돼도 커널 스레드 때문에 process_visibility 가 limited 가 되지 않는다 (수정한 결함의 실환경 확인)
+case "$(echo "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["process_visibility"])')" in
+  full) pass "root 실행에서 process_visibility=full" ;; *) fail "root 실행인데 process_visibility 가 full 이 아님" ;;
+esac
 systemctl restart "$UNIT"
 JSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
-if echo "$JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(1 if any(i["needs_restart"] for i in d["installations"]) else 0)'; then
+if echo "$JSON" | $INSPECT --no-needs-restart; then
   pass "systemctl restart 후 재시작 필요가 사라짐"
 else
   fail "restart 후에도 재시작 필요가 남음"

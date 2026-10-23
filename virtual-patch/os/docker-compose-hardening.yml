@@ -15,8 +15,10 @@
 #     (워커가 계속 종료·재시작되어 요청에 응답하지 못한다).
 #   - cap_add: [SETUID, SETGID] 를 더하면 마스터는 root, 워커 2개는 uid 33(www-data) 로 뜨고
 #     nginx 컨테이너에서 fastcgi 로 요청해 HTTP 200 응답을 받았다(read_only + tmpfs + no-new-privileges 포함).
-#   - 이 이미지는 TCP 로 listen 하므로 CHOWN 은 필요 없었다. unix 소켓에 listen.owner/listen.group
-#     또는 chown 이 필요한 구성이면 CHOWN 을 추가해야 할 수 있다(미검증). 이미지/pool 설정이
+#   - 이 이미지는 TCP 로 listen 하므로 CHOWN 은 필요 없었다. unix 소켓에 listen.owner/listen.group 을 지정하면
+#     SETUID, SETGID 만으로는 "failed to chown() the socket ... Operation not permitted" 로 FPM 초기화가 실패하고,
+#     CHOWN 을 더하면 소켓(root 마스터가 www-data 소유로 chown)이 만들어져 nginx 컨테이너가 공유 볼륨의 소켓으로
+#     FastCGI 요청해 HTTP 200 을 받았다. FOWNER 는 필요 없었다. 재현: tests/compose_socket_check.sh. 이미지/pool 설정이
 #     다르면 `docker compose logs php` 에서 "Operation not permitted" 를 확인해 조정할 것.
 # ============================================================================
 services:

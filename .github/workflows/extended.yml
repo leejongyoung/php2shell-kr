@@ -83,7 +83,7 @@ jobs:
           operating_system: freebsd
           version: "14.3"
           shell: sh
-          run: sh tests/freebsd_check.sh
+          run: sudo sh tests/freebsd_check.sh
 
   windows-real:
     name: windows (ACL, IIS FastCGI, plan, cp949)

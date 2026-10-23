@@ -221,6 +221,23 @@ class ScanFixtures(unittest.TestCase):
             result, _ = triage.scan(ADVISORY, root=None, runner_processes=deleted, exec_mode="all")
             self.assertTrue([i for i in result["installations"] if i["path"] == os.path.realpath(binary)][0]["needs_restart"])
 
+    def test_kernel_threads_do_not_limit_process_visibility(self):
+        """exe 링크가 없는 커널 스레드(ENOENT)는 권한 문제가 아니다. EACCES 만 가시성 제한으로 센다 (root 실행에서도 limited 가 되던 결함)."""
+        def readlink(path):
+            if path.startswith("/proc/3/"):
+                raise PermissionError(13, "denied")
+            raise FileNotFoundError(2, "no exe link")
+
+        def run(pids):
+            with mock.patch.object(triage.os, "listdir", lambda path: pids), \
+                    mock.patch.object(triage.os, "readlink", readlink), \
+                    mock.patch.object(triage, "read_text", lambda *args, **kwargs: None), \
+                    mock.patch.object(triage, "_boot_time", lambda: 0):
+                return triage.linux_processes()[1]
+
+        self.assertFalse(run(["2", "4"]))
+        self.assertTrue(run(["2", "3", "4"]))
+
 
 class BinaryStringVersion(unittest.TestCase):
     @POSIX

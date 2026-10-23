@@ -746,10 +746,12 @@ def linux_processes():
         base = "/proc/" + name
         try:
             exe = os.readlink(base + "/exe")
-        except OSError:
+        except PermissionError:
             exe = None
-            if os.path.isdir(base):
-                denied += 1
+            denied += 1
+        except OSError:
+            # 커널 스레드(exe 링크 없음)나 조회 중 종료된 프로세스: 권한 문제가 아니다
+            exe = None
         comm = (read_text(base + "/comm", 256) or "").strip()
         label = os.path.basename(exe.replace(" (deleted)", "")) if exe else comm
         is_php = bool(_PHP_EXE_RE.match(label)) or bool(_PHP_EXE_RE.match(comm))

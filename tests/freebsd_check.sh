@@ -18,13 +18,12 @@ env ASSUME_ALWAYS_YES=yes pkg install -y php84 python3 >/tmp/pkg-install.out 2>&
 PKGVER="$(pkg info php84 | awk '/^Version/ {print $3}' | sed 's/[_,].*//')"
 echo "pkg php84 버전: $PKGVER"
 
+INSPECT="python3 $ROOT/tests/_inspect_json.py"
 SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
 PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
-for name in "sh:$SHJSON" "python:$PYJSON"; do
-  impl="${name%%:*}"; json="${name#*:}"
-  if echo "$json" | grep -Eq "\"path\": ?\"/usr/local/(bin/php|sbin/php-fpm)[^\"]*\", ?\"version\": ?\"$PKGVER\""; then pass "$impl 판이 pkg php84 $PKGVER 를 찾음"; else fail "$impl 판이 php84 $PKGVER 를 찾지 못함"; echo "$json" | head -c 1500; fi
-done
-if echo "$SHJSON" | grep -q "pkg"; then pass "sh 판 출력에 pkg 관련 안내가 있음"; else fail "sh 판이 패키지 관리자를 pkg 로 인식하지 못함"; fi
+if echo "$SHJSON" | $INSPECT --path '^/usr/local/(bin/php|sbin/php-fpm)$' --version "$PKGVER"; then pass "sh 판이 pkg php84 $PKGVER 를 찾음"; else fail "sh 판이 php84 $PKGVER 를 찾지 못함"; fi
+if echo "$PYJSON" | $INSPECT --path '^/usr/local/(bin/php|sbin/php-fpm)$' --version "$PKGVER"; then pass "python 판이 pkg php84 $PKGVER 를 찾음"; else fail "python 판이 php84 $PKGVER 를 찾지 못함"; fi
+if sh "$ROOT/quickcheck/php2shell-quickcheck.sh" 2>&1 | grep -q "pkg upgrade"; then pass "sh 판 조치 계획이 pkg 절차(pkg upgrade)를 안내함"; else fail "sh 판이 패키지 관리자를 pkg 로 인식하지 못함"; fi
 sh "$ROOT/quickcheck/php2shell-quickcheck.sh" 2>&1 | grep -E "pkg (upgrade|audit)" | head -3
 
 if pkg audit -F >/tmp/pkg-audit.out 2>&1; then pass "pkg audit -F 정상 종료(취약 패키지 없음)"; else
@@ -35,7 +34,7 @@ sysrc php_fpm_enable=YES >/dev/null
 if service php_fpm onestart >/tmp/fpm-start.out 2>&1 || service php_fpm start >>/tmp/fpm-start.out 2>&1; then
   sleep 2
   SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
-  if echo "$SHJSON" | grep -Eq "\"sapi\": ?\"fpm\", ?\"running\": ?true"; then pass "실행 중인 php-fpm 을 running=true 로 찾음"; else fail "실행 중인 php-fpm 을 찾지 못함"; echo "$SHJSON" | head -c 1500; fi
+  if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "실행 중인 php-fpm 을 running=true 로 찾음"; else fail "실행 중인 php-fpm 을 찾지 못함"; fi
   if service php_fpm restart >/tmp/fpm-restart.out 2>&1; then pass "service php_fpm restart 동작"; else fail "service php_fpm restart"; cat /tmp/fpm-restart.out; fi
   service php_fpm stop >/dev/null 2>&1
 else

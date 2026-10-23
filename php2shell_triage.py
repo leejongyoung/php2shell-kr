@@ -601,19 +601,23 @@ def trusted_binary(path, stat_fn=os.stat):
     path = os.path.realpath(path)
     if os.name == "nt":
         # ACL을 확인할 수 없으면 안전하게 실행하지 않는다.
+        # 파일 자신($d=0)과 그 파일이 든 폴더($d=1)는 전체 쓰기 권한(0xD0156)을 본다: 폴더에 새 파일을 만들 수 있으면 DLL 을 심을 수 있다.
+        # 더 위의 상위 폴더는 새 파일/하위 폴더 만들기(0x2, 0x4)만 허용하는 권한을 무시한다(0xD0150): 기본 C:\ 의 Authenticated Users:(AD) 가 그 예이며
+        # 이미 있는 하위 폴더를 바꾸거나 지울 수는 없다.
         script = (
-            "$p=" + ps_literal(path) + "; try { while ($p) { "
+            "$p=" + ps_literal(path) + "; $d=0; try { while ($p) { "
             "$i=Get-Item -LiteralPath $p -Force -ErrorAction Stop; "
             "if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 1 }; "
             "$a=Get-Acl -LiteralPath $p -ErrorAction Stop; "
             "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
             "if ($o -notin @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) { exit 1 }; "
+            "$m=if ($d -le 1) { 0xD0156 } else { 0xD0150 }; "
             "foreach ($r in $a.Access) { "
             "if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }; "
             "$s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; "
             "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11') -and "
-            "$r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band 0xD0156)) { exit 1 } }; "
-            "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n }; "
+            "$r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band $m)) { exit 1 } }; "
+            "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n; $d++ }; "
             "Write-Output TRUSTED } catch { exit 1 }")
         code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], 20)
         return code == 0 and out.strip() == "TRUSTED"

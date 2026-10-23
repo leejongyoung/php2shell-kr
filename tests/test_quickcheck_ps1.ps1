@@ -625,6 +625,21 @@ try {
     Assert-True (Test-TrustedPath $trustFile $readOnlyAcl) 'Everyone Read/Execute는 허용'
     $inheritOnly = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @([pscustomobject]@{ Sid = 'S-1-3-0'; Allow = $true; InheritOnly = $true; Rights = 2032127 }) } }
     Assert-True (Test-TrustedPath $trustFile $inheritOnly) 'CREATOR OWNER inherit-only는 무시'
+    # 새 파일/하위 폴더 만들기(0x2/0x4)만 주는 권한은 "앱 폴더 위의 상위 폴더"에서는 무시하지만(기본 C:\ 의 Authenticated Users:(AD)),
+    # 앱 폴더 자신에서는 DLL 을 심을 수 있으므로 거부한다. 삭제 권한(DeleteChild 0x40, Delete, WRITE_DAC)은 상위 폴더에서도 거부한다.
+    $grandDir = Split-Path -Parent $trustDir
+    foreach ($sid in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')) {
+        foreach ($create in @(2, 4)) {
+            $createAbove = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @(if ($p -eq $grandDir) { [pscustomobject]@{ Sid = $sid; Allow = $true; InheritOnly = $false; Rights = $create } }) } }
+            Assert-True (Test-TrustedPath $trustFile $createAbove) ("앱 폴더 위 상위 폴더의 만들기 권한(" + $create + ")은 무시: " + $sid)
+            $createInApp = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @(if ($p -eq $trustDir) { [pscustomobject]@{ Sid = $sid; Allow = $true; InheritOnly = $false; Rights = $create } }) } }
+            Assert-True (-not (Test-TrustedPath $trustFile $createInApp)) ("앱 폴더의 만들기 권한(" + $create + ") 거부: " + $sid)
+        }
+        foreach ($destructive in @(64, 65536, 262144, 524288)) {
+            $destroyAbove = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @(if ($p -eq $grandDir) { [pscustomobject]@{ Sid = $sid; Allow = $true; InheritOnly = $false; Rights = $destructive } }) } }
+            Assert-True (-not (Test-TrustedPath $trustFile $destroyAbove)) ("상위 폴더의 삭제·ACL 변경 권한(" + $destructive + ") 거부: " + $sid)
+        }
+    }
     Assert-True (-not (Test-ExecAllowed $trustFile 'never' $false { $true })) 'never는 언제나 실행 금지'
     Assert-True (Test-ExecAllowed $trustFile 'all' $true { $false }) '-Exec는 신뢰 검사 우회'
     Assert-True (Test-ExecAllowed $trustFile 'auto' $false { $false }) '비상승 계정은 자신의 권한으로 실행 허용'

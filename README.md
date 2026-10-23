@@ -1,4 +1,4 @@
-# php2shell-triage
+# php2shell-kr: PHP2Shell 취약점 점검·대응 도구 (한국어)
 
 ![CI](https://github.com/leejongyoung/php2shell-kr/actions/workflows/ci.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/leejongyoung/php2shell-kr?include_prereleases&sort=semver)
@@ -9,12 +9,12 @@
 ![Last commit](https://img.shields.io/github/last-commit/leejongyoung/php2shell-kr)
 
 PHP2Shell(**CVE-2026-109618 / CVE-2026-109619**, PHP 엔진의 인증 없는 원격 코드 실행·메모리 노출 취약점) 점검과 대응을
-돕는 **방어용** 도구 모음입니다. Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.
+돕는 **방어용** 도구 모음입니다(도구 이름은 `php2shell-triage`이고, 저장소 이름은 한국어 사용자가 찾기 쉽도록 `php2shell-kr`입니다). Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.
 
 > **이 저장소에는 익스플로잇이 없습니다.** 공격 코드(PoC)도 받지 않습니다. 인터넷에 도는 `php2shell` 이름의 저장소 중 상당수가
 > 익스플로잇이거나 악성코드입니다(KISA도 출처 불명 PoC 실행을 경고했습니다). 취약 여부는 PoC가 아니라 **버전·프로세스·설정·로그**로 판단합니다.
 >
-> 이 도구는 **KISA·PHP 등 어느 기관의 공식 도구가 아닙니다.** 권고 내용은 `data/advisory.json` 에 출처와 함께 정리했고 상황에 따라 바뀝니다.
+> 이 도구는 **KISA·PHP 등 어느 기관의 공식 도구가 아닙니다.** 저장소 이름의 `kr`은 한국어 자료라는 뜻일 뿐 한국 정부·기관과 관련이 없습니다. 권고 내용은 `data/advisory.json` 에 출처와 함께 정리했고 상황에 따라 바뀝니다.
 
 ## 핵심 원칙
 

@@ -752,26 +752,33 @@ function Get-TrustAcl {
 }
 
 function Test-TrustedPath {
-    # 모든 상위 폴더(드라이브 루트 포함)를 확인한다. ACL reader를 주입하여 Windows 밖에서도 정책을 검증한다.
+    # 파일 자신과 그 파일이 들어 있는 폴더(앱 폴더)는 전체 쓰기 권한을 본다: 폴더에 새 파일을 만들 수 있으면 DLL 을 심어 실행을 가로챌 수 있다.
+    # 그보다 위의 상위 폴더는 "새 파일/하위 폴더 만들기"(CreateFiles 0x2, CreateDirectories 0x4)만 허용하는 권한을 무시한다:
+    # 기본 Windows 의 C:\ 에는 Authenticated Users:(AD) 가 있고, 이것으로는 이미 있는 하위 폴더를 바꾸거나 지울 수 없다.
+    # ACL reader를 주입하여 Windows 밖에서도 정책을 검증한다.
     param([string]$Path, [scriptblock]$AclReader = { param($p) Get-TrustAcl $p })
     $owners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
     $untrusted = @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')
     # WriteData/CreateFiles, AppendData/CreateDirectories, WriteEA/Attributes, Delete, DeleteChild, WRITE_DAC, WRITE_OWNER.
-    $writeMask = [long]0x000D0156
+    $fullMask = [long]0x000D0156
+    $ancestorMask = [long]0x000D0150
     try {
         $current = [IO.Path]::GetFullPath($Path)
         if (-not (Test-RegularFile $current)) { return $false }
+        $depth = 0
         while ($current) {
             $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
             if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
             $acl = & $AclReader $current
             if ($null -eq $acl -or $owners -notcontains $acl.Owner) { return $false }
+            $mask = if ($depth -le 1) { $fullMask } else { $ancestorMask }
             foreach ($rule in @($acl.Rules)) {
-                if ($rule.Allow -and -not $rule.InheritOnly -and $untrusted -contains $rule.Sid -and (([long]$rule.Rights -band $writeMask) -ne 0)) { return $false }
+                if ($rule.Allow -and -not $rule.InheritOnly -and $untrusted -contains $rule.Sid -and (([long]$rule.Rights -band $mask) -ne 0)) { return $false }
             }
             $parent = [IO.Path]::GetDirectoryName($current)
             if (-not $parent -or $parent -eq $current) { break }
             $current = $parent
+            $depth++
         }
         return $true
     } catch { return $false }

@@ -5,9 +5,11 @@
 
 기대:
   1) 누구나(Everyone) 쓸 수 있는 폴더의 파일은 신뢰하지 않는다
-  2) Administrators/SYSTEM 전용 파일과 System32\\cmd.exe 의 판정은 단정하지 않고 출력만 한다 (C:\\ 루트의 기본 ACL 은 통제할 수
-     없고, 그 ACL 때문에 모두 untrusted 가 될 수 있다 — 실제 결과는 docs/verification.ko.md 참고)
-  3) 심볼릭 링크/정션을 거치는 경로는 신뢰하지 않는다
+  2) Administrators/SYSTEM 전용 폴더의 파일과 System32\\cmd.exe 는 신뢰한다 (기본 C:\\ 루트의 Authenticated Users:(AD) 는
+     앱 폴더 위의 상위 폴더에서는 무시한다)
+  3) 앱 폴더에 Users 가 새 파일을 만들 수 있으면(DLL 심기) 신뢰하지 않는다. 앱 폴더 위의 상위 폴더에 Users:(AD) 가 있어도 신뢰하지만
+     Users:(DC)(하위 항목 삭제)가 있으면 신뢰하지 않는다
+  4) 심볼릭 링크/정션을 거치는 경로는 신뢰하지 않는다
 """
 import os
 import shutil
@@ -59,7 +61,7 @@ os.makedirs(BASE)
 show("C:\\")
 show(BASE)
 show(CMD)
-print("trusted_binary(System32\\cmd.exe) = %s" % p.trusted_binary(CMD))
+check("System32\\cmd.exe 는 신뢰함(C:\\ 루트의 (AD) 는 무시)", p.trusted_binary(CMD), True)
 
 # 1) Everyone 이 쓸 수 있는 폴더
 open_dir = os.path.join(BASE, "open")
@@ -82,13 +84,24 @@ rc, out = icacls(BASE, "/setowner", "*S-1-5-32-544")
 rc, out = icacls(BASE, "/inheritance:r")
 rc, out = icacls(BASE, "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F")
 show(locked_dir)
-locked = p.trusted_binary(locked_exe)
-# 정보(단정하지 않음): 기본 Windows 의 C:\ 루트 ACL 에는 Authenticated Users:(AD) (이 폴더에서 하위 폴더 만들기)가 있고,
-# 이 도구의 검사는 경로의 모든 상위 폴더를 같은 규칙으로 보므로 C:\ 아래의 어떤 파일도 신뢰로 판정되지 않을 수 있다.
-# 그 경우 기본 설정에서 Windows 의 PHP 는 실행하지 않고 파일의 버전 문자열로 판정한다(안전한 쪽으로 실패).
-print("정보: Administrators/SYSTEM 전용 파일 trusted_binary = %s, System32\\cmd.exe = %s" % (locked, p.trusted_binary(CMD)))
+check("Administrators/SYSTEM 전용 폴더의 파일은 신뢰함", p.trusted_binary(locked_exe), True)
 
-# 3) 정션을 거치는 경로
+# 3) 앱 폴더 / 상위 폴더의 권한. locked_exe 기준: 파일(0) -> locked_dir(앱 폴더, 1) -> BASE(상위, 2)
+rc, out = icacls(locked_dir, "/grant", "*S-1-5-32-545:(WD)")   # Users: 이 폴더에 새 파일 만들기
+assert rc == 0, out
+check("앱 폴더에 Users 가 새 파일을 만들 수 있으면 신뢰하지 않음", p.trusted_binary(locked_exe), False)
+icacls(locked_dir, "/remove:g", "*S-1-5-32-545")
+check("앱 폴더 권한을 되돌리면 다시 신뢰함", p.trusted_binary(locked_exe), True)
+rc, out = icacls(BASE, "/grant", "*S-1-5-11:(AD)")           # Authenticated Users: 이 폴더에 하위 폴더 만들기 (기본 C:\ 와 같은 권한)
+assert rc == 0, out
+check("상위 폴더의 Authenticated Users:(AD) 는 무시하고 신뢰함", p.trusted_binary(locked_exe), True)
+rc, out = icacls(BASE, "/grant", "*S-1-5-11:(DC)")           # 하위 항목 삭제 = 이미 있는 폴더를 지우고 바꿀 수 있음
+assert rc == 0, out
+show(BASE)
+check("상위 폴더에서 Authenticated Users 가 하위 항목을 삭제할 수 있으면 신뢰하지 않음", p.trusted_binary(locked_exe), False)
+icacls(BASE, "/remove:g", "*S-1-5-11")
+
+# 4) 정션을 거치는 경로
 junction = os.path.join(BASE, "junction")
 rc = subprocess.run(["cmd.exe", "/c", "mklink", "/J", junction, locked_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).returncode
 if rc == 0:

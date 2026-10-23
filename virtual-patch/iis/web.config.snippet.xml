@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  PHP2Shell (CVE-2026-109618 / CVE-2026-109619) 임시 완화: IIS web.config 조각
+  PHP2Shell (CVE-2026-109618 / CVE-2026-109619) 임시 완화: IIS web.config 조각 (요청 크기 상한)
   상태    : 미검증: IIS 환경 없음 (구문/동작 시험 안 함. 스테이징에서 확인 필수)
-  목적    : 요청 본문 크기 상한, 업로드 없는 사이트의 multipart 차단(선택).
+  목적    : 요청 본문 크기(maxAllowedContentLength) 상한만 둔다.
   한계    : 완전한 완화책이 아니다(PHP 공식 입장). 일부 경로만 줄이며 우회될 수 있다.
             웹셸 설치 후 피해는 막지 못한다. 근본 조치는 패치다.
-  적용 전 : web.config 를 백업하고 <system.webServer> 안에 병합. 메모리 상한은 앱 풀의
-            Private Memory 제한 등 OS/IIS 수준에서 따로 설정.
+            memory_limit 이나 메모리 상한은 이 파일 범위가 아니다(앱 풀의 Private Memory 제한 등 IIS/OS 수준에서 따로 설정).
+  적용 전 : web.config 를 백업하고 <system.webServer> 안에 병합한다. 업로드 기능을 스테이징에서 시험한다.
   롤백    : 백업한 web.config 로 되돌린다.
+  multipart 차단: 업로드가 전혀 없는 사이트 전용 규칙은 이 파일이 아니라 별도 파일
+            web.config.block-multipart.xml 에 있다(업로드 없음으로 선택했을 때만 생성된다).
+            업로드가 있는 사이트에서는 그 규칙을 적용하지 말 것.
   maxAllowedContentLength 단위는 바이트: 8M=8388608, 32M=33554432.
 -->
 <configuration>
@@ -17,18 +20,5 @@
         <requestLimits maxAllowedContentLength="@@POST_MAX_BYTES@@" />
       </requestFiltering>
     </security>
-
-    <!-- 선택: 업로드가 없는 사이트 전용. 업로드가 있으면 제거. URL Rewrite 모듈 필요. -->
-    <rewrite>
-      <rules>
-        <rule name="PHP2Shell block multipart" stopProcessing="true">
-          <match url=".*" />
-          <conditions>
-            <add input="{HTTP_CONTENT_TYPE}" pattern="^\s*multipart/form-data" ignoreCase="true" />
-          </conditions>
-          <action type="CustomResponse" statusCode="403" statusReason="Forbidden" statusDescription="multipart blocked" />
-        </rule>
-      </rules>
-    </rewrite>
   </system.webServer>
 </configuration>

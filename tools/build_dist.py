@@ -28,26 +28,22 @@ MARKER = "#PS1-PAYLOAD-BEGIN"
 
 # 헤더는 반드시 ASCII 입니다 (cmd.exe 가 코드 페이지와 무관하게 읽을 수 있도록). 한글은 PowerShell 페이로드 안에만 있습니다.
 BAT_HEADER = r"""@echo off
-rem php2shell-triage quickcheck for Windows (single file). Read-only: it never changes the server.
-rem Usage:  php2shell-quickcheck.bat [-Json] [-NoExec] [-Offline] [-PlanFile out.ps1] [-Help]
+rem php2shell-triage for Windows. Does not change server configuration or packages.
+rem Runs trusted PHP binaries with -n -v by default. Use -NoExec on suspect hosts; -Exec forces execution.
+rem Usage: php2shell-quickcheck.bat [-Json] [-NoExec] [-Exec] [-Offline] [-Root dir] [-PlanFile new.ps1] [-Help]
 rem Exit codes: 0 nothing to do / 1 action required / 3 inconclusive / 2 launcher error
 setlocal
 set "P2S_SELF=%~f0"
-set "P2S_TMP=%TEMP%\php2shell-quickcheck-%RANDOM%%RANDOM%.ps1"
-where powershell >nul 2>nul
-if errorlevel 1 (
-  echo [php2shell] Windows PowerShell is required but was not found.
+rem Execute the embedded script in memory: no extracted file, temp directory, or elevated temp-file race.
+set "P2S_ARGS=%*"
+set "P2S_HOST=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%P2S_HOST%" (
+  echo [php2shell] Windows PowerShell is required but was not found at the system path.
   exit /b 2
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[IO.File]::ReadAllText($env:P2S_SELF,[Text.Encoding]::UTF8); $i=$s.LastIndexOf([string][char]10+'#PS1-PAYLOAD-BEGIN'); if($i -lt 0){exit 3}; [IO.File]::WriteAllText($env:P2S_TMP,$s.Substring($i+1),(New-Object Text.UTF8Encoding $true))"
-if errorlevel 1 (
-  echo [php2shell] could not extract the embedded PowerShell script.
-  exit /b 2
-)
-powershell -NoProfile -ExecutionPolicy Bypass -File "%P2S_TMP%" %*
+"%P2S_HOST%" -NoProfile -ExecutionPolicy Bypass -Command "try { if((New-Object IO.FileInfo($env:P2S_SELF)).Length -gt 2097152){exit 2}; $s=[IO.File]::ReadAllText($env:P2S_SELF,[Text.Encoding]::UTF8); $i=$s.LastIndexOf([string][char]10+'#PS1-PAYLOAD-BEGIN'); if($i -lt 0){exit 2}; $q=[string][char]34; $pattern=$q+'[^'+$q+']*'+$q+'|[^\s'+$q+']+'; $raw=[string]$env:P2S_ARGS; if((($raw.ToCharArray() | Where-Object {$_ -eq [char]34} | Measure-Object).Count -band 1) -ne 0){throw 'Unmatched argument quote'}; $tokens=@([regex]::Matches($raw,$pattern)); $parsed=@{}; for($n=0;$n -lt $tokens.Count;$n++){ $k=$tokens[$n].Value; if($k -notmatch '^-(Json|NoExec|Exec|Offline|Root|PlanFile|Help|Classify)$'){throw ('Unknown option: '+$k)}; $name=$k.Substring(1); if($name -match '^(Root|PlanFile|Classify)$'){ $n++; if($n -ge $tokens.Count){throw ('Missing value: '+$k)}; $parsed[$name]=$tokens[$n].Value.Trim([char]34) }else{ $parsed[$name]=$true } }; Remove-Item Env:P2S_ARGS -ErrorAction SilentlyContinue; & ([scriptblock]::Create($s.Substring($i+1))) @parsed; exit $LASTEXITCODE } catch { [Console]::Error.WriteLine('[php2shell] '+$_.Exception.Message); exit 2 }"
 set "P2S_RC=%ERRORLEVEL%"
-del "%P2S_TMP%" >nul 2>nul
-if "%~1"=="" if not defined P2S_NOPAUSE echo %cmdcmdline% | find /i " /c " >nul && pause
+if "%~1"=="" if not defined P2S_NOPAUSE pause
 exit /b %P2S_RC%
 """
 

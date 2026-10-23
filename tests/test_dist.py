@@ -3,6 +3,7 @@
 # Copyright 2026 Lee Jongyoung
 """배포 묶음(단일 .bat / .sh / .ps1, 체크섬) 검증."""
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -62,6 +63,57 @@ class DistBundle(unittest.TestCase):
         self.assertEqual(payload.decode("utf-8").replace("\r\n", "\n"), source.decode("utf-8").replace("\r\n", "\n"))
         self.assertIn(b"-ExecutionPolicy Bypass", header)
         self.assertIn(b"exit /b %P2S_RC%", header)
+        self.assertIn(b"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", header)
+        self.assertIn(b"[scriptblock]::Create", header)
+        self.assertIn(b"P2S_NOPAUSE", header)
+        self.assertNotIn(b"where powershell", header.lower())
+        self.assertNotIn(b"P2S_TMP", header)
+        self.assertNotIn(b"WriteAllText", header)
+        self.assertNotIn(b"%TEMP%", header)
+        self.assertNotIn(b"%RANDOM%", header)
+
+    @unittest.skipUnless(os.environ.get("P2S_TEST_PWSH") or shutil.which("pwsh"),
+                         "PowerShell 필요(Windows CI 또는 P2S_TEST_PWSH)")
+    def test_in_memory_launcher_command_and_argument_binding(self):
+        """실제 .bat의 -Command를 pwsh에서 실행: 임시 파일 없음, 값을 코드로 평가하지 않음."""
+        host = os.environ.get("P2S_TEST_PWSH") or shutil.which("pwsh")
+        command = next(line for line in build_dist.BAT_HEADER.splitlines()
+                       if line.startswith('"%P2S_HOST%"'))
+        command = command.split(' -Command "', 1)[1][:-1].replace("%%", "%")
+        bat = os.path.join(self.dir, "php2shell-quickcheck.bat")
+        env = dict(os.environ, P2S_SELF=bat, P2S_NOPAUSE="1")
+        env.pop("PHP2SHELL_TEST_VERSION_FILE", None)
+        env["P2S_ARGS"] = "-Classify 8.4.26"
+        proc = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "vulnerable", proc.stderr)
+        with tempfile.TemporaryDirectory(prefix="p2s launcher ") as root:
+            php = os.path.join(root, "php")
+            os.mkdir(php)
+            with open(os.path.join(php, "php.exe"), "wb") as handle:
+                handle.write(b"X-Powered-By: PHP/8.4.26\0")
+            plan = os.path.join(root, "review plan.ps1")
+            env["P2S_ARGS"] = '-Json -NoExec -Offline -Root "%s" -PlanFile "%s"' % (root, plan)
+            proc = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  universal_newlines=True, timeout=30)
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            result = json.loads(proc.stdout)
+            self.assertEqual(result["exit_code"], 1)
+            self.assertEqual(result["plan_file"], plan)
+            self.assertTrue(os.path.isfile(plan))
+            env["P2S_ARGS"] = '-Json -NoExec -Root "%s" -PlanFile "%s"' % (root, plan)
+            again = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   universal_newlines=True, timeout=30)
+            self.assertEqual(again.returncode, 2, again.stderr)
+        env["P2S_ARGS"] = "-Unknown"
+        bad = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=30)
+        self.assertEqual(bad.returncode, 2)
 
     @unittest.skipUnless(shutil.which("sh") and os.name == "posix", "POSIX sh 필요")
     def test_sh_is_valid_and_standalone(self):
@@ -76,10 +128,21 @@ class DistBundle(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows 전용: 실제 cmd.exe 로 .bat 실행")
     def test_bat_runs_on_windows(self):
         bat = os.path.join(self.dir, "php2shell-quickcheck.bat")
-        proc = subprocess.run(["cmd.exe", "/c", bat, "-Classify", "8.4.26"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        self.assertEqual(proc.stdout.strip().splitlines()[-1], "vulnerable", proc.stderr)
-        proc = subprocess.run(["cmd.exe", "/c", bat, "-Classify", "8.4.27"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        self.assertEqual(proc.stdout.strip().splitlines()[-1], "fixed", proc.stderr)
+        cmd = os.path.join(os.environ["SystemRoot"], "System32", "cmd.exe")
+        env = dict(os.environ, P2S_NOPAUSE="1")
+        with tempfile.TemporaryDirectory() as untrusted:
+            # cwd/PATH의 가짜 호스트를 절대 경로 호출이 선택하지 않음.
+            with open(os.path.join(untrusted, "powershell.exe"), "wb") as handle:
+                handle.write(b"not a trusted executable")
+            env["PATH"] = untrusted + os.pathsep + env.get("PATH", "")
+            proc = subprocess.run([cmd, "/c", bat, "-Classify", "8.4.26"], env=env, cwd=untrusted,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip().splitlines()[-1], "vulnerable", proc.stderr)
+            proc = subprocess.run([cmd, "/c", bat, "-Classify", "8.4.27"], env=env, cwd=untrusted,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip().splitlines()[-1], "fixed", proc.stderr)
 
 
 if __name__ == "__main__":

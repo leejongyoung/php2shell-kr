@@ -18,8 +18,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.8", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
@@ -28,7 +30,9 @@ jobs:
     name: unit (python 3.6 container)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: docker run --rm -v "$PWD:/r" -w /r python:3.6 python -m unittest discover -s tests -v
 
   sh-linux:
@@ -39,14 +43,18 @@ jobs:
       matrix:
         image: ["debian:12-slim", "ubuntu:24.04", "alpine:3.20", "rockylinux:9-minimal", "almalinux:9-minimal", "opensuse/leap:15.6"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: docker run --rm -v "$PWD:/r:ro" "${{ matrix.image }}" sh /r/tests/test_quickcheck_sh.sh
 
   sh-macos:
     name: sh quickcheck (macos)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: sh tests/test_quickcheck_sh.sh
 
   powershell:
@@ -61,7 +69,9 @@ jobs:
           - { os: ubuntu-latest, shell: pwsh }
           - { os: macos-latest, shell: pwsh }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: harness (Windows PowerShell 5.1)
         if: matrix.shell == 'powershell'
         shell: powershell
@@ -75,12 +85,14 @@ jobs:
     name: real PHP images and distro packages (docker)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
       - run: python tests/platform_matrix.py --json platform-matrix.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: platform-matrix
@@ -90,8 +102,10 @@ jobs:
     name: real PHP on Windows (vulnerable and fixed builds)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
       - name: build dist
@@ -102,6 +116,9 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest "https://windows.php.net/downloads/releases/archives/php-8.4.26-nts-Win32-vs17-x64.zip" -OutFile vuln.zip
           Invoke-WebRequest "https://windows.php.net/downloads/releases/php-8.4.27-nts-Win32-vs17-x64.zip" -OutFile fixed.zip
+          # 내려받은 파일의 SHA-256 을 고정값과 대조한다 (8.4.27 값은 downloads.php.net 의 sha256sum.txt 와 일치)
+          if ((Get-FileHash vuln.zip -Algorithm SHA256).Hash.ToLower() -ne 'da68394f9193b7f6b89d0c76861a4034ae10efee7fd55a7255d8118c2acf70d7') { throw 'vuln.zip checksum mismatch' }
+          if ((Get-FileHash fixed.zip -Algorithm SHA256).Hash.ToLower() -ne '93bd8a815a52156606fb906d0573437908c61f96e2cc52c03a51e36a41bf5236') { throw 'fixed.zip checksum mismatch' }
           Expand-Archive vuln.zip -DestinationPath C:\php-vulnerable
           Expand-Archive fixed.zip -DestinationPath C:\php-fixed
           & C:\php-vulnerable\php.exe -n -v
@@ -148,14 +165,16 @@ jobs:
     name: dist bundle
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
       - run: python tools/build_dist.py --out dist
       - name: verify checksums
         run: cd dist/php2shell-triage-*/ && sha256sum -c SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist
           path: dist/*.zip

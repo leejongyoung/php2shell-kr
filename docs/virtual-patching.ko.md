@@ -12,10 +12,13 @@
 2. 표지/중첩/multipart 규칙(ModSecurity): `PHP_SESSION_UPLOAD_PROGRESS` 필드명, 과도한 대괄호 중첩,
    과다 인자/파일, chunked multipart. 업로드가 없는 사이트는 multipart 전체 차단 가능.
 3. PHP 관리자 전용 ini: `php_admin_value/flag`(pool 또는 mod_php)로 고정. `session.upload_progress.enabled=0`,
-   크기 상한. memory_limit 은 ini 파일이 아니라 admin 설정에만 둡니다(덮어쓰기 방지).
+   크기 상한. memory_limit 은 ini 파일이 아니라 admin 설정에만 둡니다(덮어쓰기 방지). pool/Apache 파일에서
+   `memory_limit=-1` 은 기본 주석 처리입니다. OS 메모리 상한을 먼저 설정하고 적용 여부를 확인한 뒤에만 pool 의
+   `;php_admin_value[memory_limit] = -1` 앞의 `;` 또는 Apache 해당 모듈 블록의
+   `#php_admin_value memory_limit -1` 앞의 `#` 를 제거하세요. 다른 업로드 진행률/크기 제한은 기본 활성입니다.
    `session.auto_start=0` 은 $_SESSION 을 session_start() 없이 쓰는 페이지를 깨뜨릴 수 있습니다(Xint).
 4. OS 메모리 상한(가용성 경계): `memory_limit=-1` 은 상한을 없애므로 systemd MemoryMax/cgroup/컨테이너
-   mem_limit 이 필수입니다. RLIMIT_AS/RLIMIT_DATA 는 취약한 할당 실패를 유발할 수 있어 쓰지 마세요.
+   mem_limit/--memory 를 먼저 설정해야 합니다. RLIMIT_AS/RLIMIT_DATA 는 취약한 할당 실패를 유발할 수 있어 쓰지 마세요.
    이 상한은 가용성 보호이지 공격 차단이 아닙니다.
 5. 노출 줄이기: 점검 페이지, IP 허용 목록/VPN, 다른 방법이 없으면 사이트를 내리는 것(KISA/NSA/CERT-EU 권고).
 6. 침해 후 피해 축소: egress 필터링, 읽기 전용/noexec, SELinux/AppArmor, auditd/FIM,
@@ -31,7 +34,7 @@
 | PHP-FPM | pool 파일의 php_admin_* + systemd drop-in |
 | nginx | nginx 조각 (+ ModSecurity v3 사용 시 규칙) |
 | Apache | Apache 조각 (+ ModSecurity v2) |
-| IIS | web.config 조각 (미검증: IIS 환경 없음) |
+| IIS | `web.config.snippet.xml` 은 크기 상한만; `web.config.block-multipart.xml` 은 업로드 없음 선택 시에만 생성·적용 (미검증: IIS 환경 없음) |
 | 컨테이너 | compose 하드닝 + 이미지 교체 |
 | 노출 감소 불가 + 완화 부족 | 서비스 중단 고려 |
 

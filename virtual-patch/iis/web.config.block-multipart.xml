@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PHP2Shell 임시 완화: IIS URL Rewrite 로 multipart/form-data 차단 (업로드가 없는 사이트 전용)
+  상태    : 미검증: IIS 환경 없음 (구문/동작 시험 안 함. 스테이징에서 확인 필수)
+  목적    : 파일 업로드가 전혀 없는 사이트에서 multipart 요청 경로를 403 으로 막는다.
+  한계    : 완전한 완화책이 아니다(PHP 공식 입장). 다른 Content-Type 경로는 막지 못하며
+            우회될 수 있다. 업로드/폼 파일 전송이 있는 사이트에서는 절대 적용하지 말 것.
+  전제    : IIS URL Rewrite 모듈 설치 필요. 없으면 <rewrite> 요소를 인식하지 못해 사이트 설정이 오류가 난다.
+  적용 전 : web.config 를 백업하고 <system.webServer> 안에 병합한다. 로그인/폼/API 가 multipart 를 쓰는지 확인.
+            요청 크기 상한은 web.config.snippet.xml 에 있다(함께 병합).
+  롤백    : 아래 <rule> 을 삭제하거나 백업한 web.config 로 되돌린다.
+-->
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name="PHP2Shell block multipart" stopProcessing="true">
+          <match url=".*" />
+          <conditions>
+            <add input="{HTTP_CONTENT_TYPE}" pattern="^\s*multipart/form-data" ignoreCase="true" />
+          </conditions>
+          <action type="CustomResponse" statusCode="403" statusReason="Forbidden" statusDescription="multipart blocked" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>

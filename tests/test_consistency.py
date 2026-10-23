@@ -67,6 +67,14 @@ class PythonAndShellAgree(unittest.TestCase):
             self.assertEqual(json.loads(py.stdout)["installations"], [])
             self.assertEqual(json.loads(sh.stdout)["installations"], [])
 
+    def test_unknown_installation_prevents_success_even_with_fixed_installation(self):
+        with tempfile.TemporaryDirectory() as root:
+            fake_php(os.path.join(root, "usr/bin/php"), "8.4.27")
+            fake_php(os.path.join(root, "usr/bin/php8"), "unclassifiable")
+            py, sh = self.run_both(root)
+            self.assertEqual((py.returncode, sh.returncode), (3, 3), sh.stderr)
+            self.assertEqual(rows(json.loads(py.stdout)), rows(json.loads(sh.stdout)))
+
     def test_no_exec_never_runs_binaries_in_either(self):
         with tempfile.TemporaryDirectory() as root:
             marker = os.path.join(root, "ran")

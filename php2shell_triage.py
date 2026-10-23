@@ -4,7 +4,8 @@
 # Copyright 2026 Lee Jongyoung
 """php2shell-triage: PHP2Shell(CVE-2026-109618 / CVE-2026-109619) 로컬 점검 도구.
 
-이 도구는 방어용입니다. 익스플로잇을 포함하지 않고, 서버를 바꾸지 않으며(읽기 전용),
+이 도구는 방어용입니다. 익스플로잇을 포함하지 않고 서버 설정·패키지를 바꾸지 않습니다.
+신뢰할 수 있는 PHP 바이너리만 `-n -v` 로 실행합니다(--no-exec 로 끌 수 있음).
 네트워크로 아무것도 보내지 않습니다. 조치는 명령으로 '출력'만 합니다.
 
   python3 php2shell_triage.py                 # 이 서버의 PHP를 찾아 판정과 조치 계획 출력
@@ -20,14 +21,20 @@ import glob
 import gzip
 import json
 import os
+import hashlib
+import fnmatch
+import ntpath
 import platform
 import re
 import shlex
 import shutil
 import socket
 import subprocess
+import stat
 import sys
 import time
+import threading
+from urllib.parse import urlsplit
 
 __version__ = "0.1.0"
 TOOL = "php2shell-triage"
@@ -193,20 +200,81 @@ EMBEDDED_ADVISORY = json.loads(r'''{
 # END EMBEDDED ADVISORY
 
 
+class Advisory(dict):
+    """권고 내용과 별도로 실제로 읽은 데이터의 출처를 보존한다."""
+
+
+def clean(value):
+    return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", str(value))
+
+
+def markdown_value(value):
+    return clean(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
+        "`", "&#96;").replace("|", "&#124;")
+
+
+def validate_advisory(data):
+    """내장 스키마의 알려진 키/타입만 허용하며 코드/제어문자는 거부한다."""
+    def visit(value, template, key=""):
+        if type(value) is not type(template):
+            raise ValueError("권고 데이터 타입 오류: " + key)
+        if isinstance(value, dict):
+            if set(value) != set(template):
+                raise ValueError("권고 데이터 키 오류: " + key)
+            for child in value:
+                visit(value[child], template[child], child)
+        elif isinstance(value, list):
+            if not value or not template:
+                raise ValueError("빈 권고 목록: " + key)
+            if key == "settings" and len(value) != len(template):
+                raise ValueError("완화 설정 목록 오류")
+            for index, child in enumerate(value):
+                visit(child, template[index] if key == "settings" else template[0], key)
+        elif isinstance(value, str):
+            if len(value) > 4096 or clean(value) != value:
+                raise ValueError("권고 데이터 제어문자/길이 오류: " + key)
+            if key in ("cves", "vendor_patch_evidence_cves"):
+                valid = re.fullmatch(r"CVE-\d{4}-\d+", value)
+            elif key == "url" or key in EMBEDDED_ADVISORY["source_backport_urls"]:
+                url = urlsplit(value)
+                valid = (url.scheme in ("https", "http") and url.netloc and
+                         not re.search(r"[\s'\"`\\<>]", value))
+            elif key.endswith("_ko") or key in ("title", "affected_range"):
+                valid = True
+            else:
+                valid = re.fullmatch(r"[0-9A-Za-z.\-+~: /_()]*", value)
+            if not valid:
+                raise ValueError("권고 데이터 값 오류: " + key)
+        elif isinstance(value, float) and not (0 <= value <= 10):
+            raise ValueError("권고 점수 오류")
+    visit(data, EMBEDDED_ADVISORY)
+    if set(data["cves"]) != set(EMBEDDED_ADVISORY["cves"]) or set(
+            data["vendor_patch_evidence_cves"]) != set(EMBEDDED_ADVISORY["cves"]):
+        raise ValueError("대상 CVE 불일치")
+    for branch, version in data["fixed_releases"].items():
+        if not re.fullmatch(re.escape(branch) + r"\.\d+(?:RC\d+)?", version):
+            raise ValueError("수정 버전 오류: " + branch)
+    return data
+
+
 def load_advisory(path=None):
-    candidates = []
-    if path:
-        candidates.append(path)
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(os.path.join(here, "data", "advisory.json"))
-    candidates.append(os.path.join(here, "advisory.json"))
+    candidates = [path] if path else [os.path.join(here, "data", "advisory.json"),
+                                    os.path.join(here, "advisory.json")]
     for candidate in candidates:
-        if os.path.isfile(candidate):
-            with open(candidate, "r", encoding="utf-8") as handle:
-                return json.load(handle)
-    if EMBEDDED_ADVISORY:
-        return EMBEDDED_ADVISORY
-    raise SystemExit("권고 데이터(data/advisory.json)를 찾을 수 없습니다.")
+        if path or os.path.lexists(candidate):
+            raw = read_bytes(candidate, 2000000)
+            if raw is None:
+                raise ValueError("권고 데이터를 읽을 수 없습니다: " + clean(candidate))
+            data = Advisory(validate_advisory(json.loads(raw.decode("utf-8"))))
+            data.source = {"path": os.path.abspath(candidate), "sha256": hashlib.sha256(raw).hexdigest(),
+                           "custom": bool(path)}
+            return data
+    raw = json.dumps(EMBEDDED_ADVISORY, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    data = Advisory(validate_advisory(EMBEDDED_ADVISORY.copy()))
+    data.source = {"path": "embedded:" + os.path.abspath(__file__), "sha256": hashlib.sha256(raw).hexdigest(),
+                   "custom": False}
+    return data
 
 
 # --- 버전 판정 -------------------------------------------------------------------
@@ -219,7 +287,7 @@ _RELEASE_RANK = 9
 
 def parse_version(text):
     """문자열에서 처음 나오는 X.Y.Z(+선택적 사전 릴리스 표기)를 (major, minor, patch, rank, num)로."""
-    match = _VERSION_RE.search(text or "")
+    match = _VERSION_RE.search((text or "")[:4096])
     if not match:
         return None
     major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))
@@ -281,32 +349,303 @@ CLASS_KO = {
 
 
 # --- 실행 도우미 -----------------------------------------------------------------
-def run(cmd, timeout=6):
-    """명령 실행. (returncode, stdout) 를 돌려주고 실패하면 (None, '')."""
-    env = dict(os.environ)
-    env["LC_ALL"] = "C"
+SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+OUTPUT_LIMIT = 4096
+
+
+def privileged():
+    if os.name == "nt":
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def windows_systemroot():
+    import ctypes
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer))
+    if not length or length >= len(buffer):
+        raise OSError("Windows 시스템 디렉터리를 확인할 수 없습니다")
+    return buffer.value
+
+
+def helper_path(name):
+    if os.path.isabs(name):
+        return name
+    if os.name == "nt":
+        system = os.path.join(windows_systemroot(), "System32")
+        if name.lower() in ("powershell", "powershell.exe"):
+            return os.path.join(system, "WindowsPowerShell", "v1.0", "powershell.exe")
+        return os.path.join(system, name)
+    return shutil.which(name, path=SAFE_PATH)
+
+
+def run(cmd, timeout=6, pass_fds=()):
+    """최소 환경, 닫힌 stdin, 제한 시간 및 4096바이트 stdout. stderr는 보관하지 않는다."""
+    env = {"LC_ALL": "C", "PATH": SAFE_PATH}
+    if os.name == "nt":
+        systemroot = windows_systemroot()
+        env = {"SystemRoot": systemroot, "PATH": os.path.join(systemroot, "System32")}
+    proc = None
     try:
-        proc = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-            timeout=timeout, env=env, stdin=subprocess.DEVNULL,
-        )
-        return proc.returncode, proc.stdout
+        command = list(cmd)
+        command[0] = helper_path(command[0])
+        if not command[0]:
+            return None, ""
+        options = {"pass_fds": pass_fds} if os.name != "nt" else {}
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                env=env, stdin=subprocess.DEVNULL, bufsize=0, **options)
+        chunks = []
+        def collect():
+            remaining = OUTPUT_LIMIT
+            try:
+                while remaining:
+                    chunk = os.read(proc.stdout.fileno(), min(1024, remaining))
+                    if not chunk:
+                        return
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                proc.kill()
+            except (OSError, ValueError):
+                pass
+        reader = threading.Thread(target=collect)
+        reader.daemon = True
+        reader.start()
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            code = None
+        reader.join(timeout=1)
+        proc.stdout.close()
+        return code, b"".join(chunks).decode("utf-8", "replace")
     except (OSError, subprocess.SubprocessError, ValueError):
+        if proc is not None:
+            proc.kill()
+            proc.wait()
         return None, ""
+
+
+def open_directory(path):
+    """POSIX: 전체 경로를 디렉터리 FD로 고정하며 중간 링크도 거부한다."""
+    directory = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in os.path.abspath(path).strip(os.sep).split(os.sep):
+            if not component:
+                continue
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        return directory
+    except BaseException:
+        os.close(directory)
+        raise
+
+
+def resolve_inside(root, path):
+    """루트 밖으로 나가는 링크와 '..'를 거부한다. 링크는 최대 40회만 해석한다."""
+    root = os.path.realpath(root)
+    path = os.path.abspath(path)
+    try:
+        if os.path.commonpath([root, path]) != root:
+            return None
+    except ValueError:
+        return None
+    todo = os.path.relpath(path, root).split(os.sep)
+    parts, links, directories = [], 0, []
+    try:
+        if os.name != "nt":
+            directories.append(open_directory(root))
+        while todo:
+            part = todo.pop(0)
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if not parts:
+                    return None
+                parts.pop()
+                if len(directories) > len(parts) + 1:
+                    os.close(directories.pop())
+                continue
+            current = os.path.join(root, *(parts + [part]))
+            info = (os.stat(part, dir_fd=directories[-1], follow_symlinks=False)
+                    if directories else os.lstat(current))
+            if stat.S_ISLNK(info.st_mode):
+                links += 1
+                if links > 40:
+                    return None
+                target = os.readlink(part, dir_fd=directories[-1]) if directories else os.readlink(current)
+                if os.path.isabs(target):
+                    if os.path.commonpath([root, target]) != root:
+                        return None
+                    parts = []
+                    while len(directories) > 1:
+                        os.close(directories.pop())
+                    target = os.path.relpath(target, root)
+                todo = target.split(os.sep) + todo
+            else:
+                if getattr(info, "st_file_attributes", 0) & 0x400:
+                    return None
+                parts.append(part)
+                if todo and directories:
+                    directories.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                               dir_fd=directories[-1]))
+        return os.path.join(root, *parts)
+    except (OSError, ValueError):
+        return None
+    finally:
+        for directory in directories:
+            os.close(directory)
 
 
 def under(root, path):
     if not root or root == "/":
         return path
-    return os.path.join(root, path.lstrip("/"))
+    return os.path.join(os.path.realpath(root), path.lstrip("/"))
 
 
-def read_text(path, limit=2000000):
+def safe_glob(root, pattern, notes=None):
+    if not root:
+        return glob.glob(pattern)
+    paths = [os.path.realpath(root)]
+    for component in pattern.lstrip("/").split("/"):
+        children = []
+        for parent in paths:
+            # 이전 컴포넌트가 바뀌었다면 호스트 쪽을 열거하지 않는다.
+            resolved_parent = resolve_inside(root, parent)
+            if resolved_parent is None:
+                continue
+            try:
+                if os.name == "nt":
+                    names = os.listdir(resolved_parent)
+                else:
+                    directory = open_directory(resolved_parent)
+                    try:
+                        names = os.listdir(directory)
+                    finally:
+                        os.close(directory)
+            except OSError:
+                continue
+            for name in fnmatch.filter(names, component):
+                candidate = os.path.join(resolved_parent, name)
+                resolved = resolve_inside(root, candidate)
+                if resolved is not None:
+                    children.append(resolved)
+                elif notes is not None:
+                    notes.append("루트 밖/해석 불가 링크 제외: " + clean(candidate))
+        paths = children
+    return paths
+
+
+def open_regular(path, limit, root=None):
+    """링크를 먼저 해석한 후 모든 디렉터리를 NOFOLLOW로 열어 교체 경쟁도 차단한다."""
+    resolved = resolve_inside(root, path) if root else os.path.realpath(path)
+    # fallback: resolve_inside 가 심볼릭 링크 체인 등을 처리 못 해서 None 을 반환할 때,
+    # 여전히 루트 안이라면 realpath 로 폴백한다(보안: 루트 밖이면 거부).
+    if resolved is None and root:
+        try:
+            real = os.path.realpath(path)
+            if os.path.commonpath([os.path.realpath(root), real]) == os.path.realpath(root):
+                resolved = real
+        except OSError:
+            pass
+    if resolved is None:
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory = None
+    fd = None
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            return handle.read(limit)
+        if os.name != "nt":
+            directory = open_directory(os.path.dirname(resolved))
+            fd = os.open(os.path.basename(resolved), flags, dir_fd=directory)
+        else:
+            fd = os.open(resolved, flags | getattr(os, "O_BINARY", 0))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            os.close(fd)
+            fd = None
+            return None
+        handle = os.fdopen(fd, "rb")
+        fd = None
+        return handle
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        return None
+    finally:
+        if directory is not None:
+            os.close(directory)
+
+
+def read_bytes(path, limit, root=None):
+    handle = open_regular(path, limit, root)
+    if handle is None:
+        return None
+    try:
+        with handle:
+            data = handle.read(limit + 1)
+        return data if len(data) <= limit else None
     except OSError:
         return None
+
+
+def read_text(path, limit=2000000, root=None):
+    data = read_bytes(path, min(limit, 2000000), root)
+    return "\n".join(line[:4096] for line in data.decode("utf-8", "replace").splitlines()) if data is not None else None
+
+
+def trusted_binary(path, stat_fn=os.stat):
+    """POSIX root 소유권/권한 검사. stat_fn 주입으로 비특권 테스트 가능."""
+    path = os.path.realpath(path)
+    if os.name == "nt":
+        # ACL을 확인할 수 없으면 안전하게 실행하지 않는다.
+        script = (
+            "$p=" + ps_literal(path) + "; try { while ($p) { "
+            "$i=Get-Item -LiteralPath $p -Force -ErrorAction Stop; "
+            "if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 1 }; "
+            "$a=Get-Acl -LiteralPath $p -ErrorAction Stop; "
+            "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
+            "if ($o -notin @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) { exit 1 }; "
+            "foreach ($r in $a.Access) { "
+            "if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }; "
+            "$s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; "
+            "if ($s -in @('S-1-1-0','S-1-5-32-545','S-1-5-11') -and "
+            "$r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band 0xD0156)) { exit 1 } }; "
+            "$n=[IO.Path]::GetDirectoryName($p); if (!$n -or $n -eq $p) { break }; $p=$n }; "
+            "Write-Output TRUSTED } catch { exit 1 }")
+        code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], 20)
+        return code == 0 and out.strip() == "TRUSTED"
+    if any(path == p or path.startswith(p + "/") for p in
+           ("/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp", "/dev/shm", "/run/user", "/home", "/Users")):
+        return False
+    first = True
+    try:
+        while True:
+            info = stat_fn(path)
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                return False
+            if first and not stat.S_ISREG(info.st_mode):
+                return False
+            if not first and not stat.S_ISDIR(info.st_mode):
+                return False
+            if path == os.path.dirname(path):
+                return True
+            path, first = os.path.dirname(path), False
+    except OSError:
+        return False
+
+
+def ps_literal(value):
+    return "'" + re.sub(r"['\u2018\u2019\u201a\u201b]", lambda m: m.group(0) * 2, clean(value)) + "'"
+
+
+def valid_unit(value):
+    return bool(re.fullmatch(r"[A-Za-z0-9@._:-]+\.(?:service|socket)", value))
+
+
+def valid_package(value):
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.:@-]*", value))
 
 
 # --- 플랫폼 ----------------------------------------------------------------------
@@ -315,7 +654,7 @@ def detect_platform(root=None):
     info = {"system": system, "pretty": "%s %s" % (system, platform.release()), "id": system.lower(),
             "container": False, "pkg": None}
     if system == "Linux":
-        osrel = read_text(under(root, "/etc/os-release")) or ""
+        osrel = read_text(under(root, "/etc/os-release"), root=root) or ""
         values = {}
         for line in osrel.splitlines():
             if "=" in line:
@@ -347,13 +686,13 @@ def detect_package_manager(info, root=None):
     if ident & {"debian", "ubuntu"}:
         return "apt"
     if ident & {"rhel", "fedora", "centos", "rocky", "almalinux", "alma", "amzn", "ol", "oracle"}:
-        return "dnf" if shutil.which("dnf") or not shutil.which("yum") else "yum"
+        return "dnf" if helper_path("dnf") or not helper_path("yum") else "yum"
     if "alpine" in ident:
         return "apk"
     if ident & {"suse", "sles", "opensuse", "opensuse-leap", "opensuse-tumbleweed"}:
         return "zypper"
     for tool, name in (("apt-get", "apt"), ("dnf", "dnf"), ("yum", "yum"), ("apk", "apk"), ("zypper", "zypper")):
-        if shutil.which(tool):
+        if helper_path(tool):
             return name
     return None
 
@@ -526,7 +865,10 @@ def _is_binary_candidate(path):
     base = os.path.basename(path)
     if _SKIP_NAMES.search(base):
         return False
-    if os.path.isdir(path):
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return False
+    except OSError:
         return False
     low = base.lower()
     if low.endswith((".so", ".dylib", ".dll")):
@@ -534,29 +876,39 @@ def _is_binary_candidate(path):
     return bool(_PHP_EXE_RE.match(base))
 
 
-def discover_files(root=None):
+def discover_files(root=None, notes=None):
     found = []
     if platform.system() == "Windows" and not root:
         patterns = WINDOWS_BINARY_GLOBS
     else:
         patterns = POSIX_BINARY_GLOBS
     for pattern in patterns:
-        for path in glob.glob(under(root, pattern)):
+        for path in safe_glob(root, pattern, notes):
             if _is_binary_candidate(path):
                 found.append(path)
     return sorted(set(found))
 
 
 # --- 버전 확인 / 패키지 -----------------------------------------------------------
-def exec_version(path, sapi):
-    """발견한 바이너리를 `-n -v` 로 실행해 버전을 읽는다 (--no-exec 이면 호출하지 않는다)."""
+def exec_version(path, sapi, root=None):
+    """정책을 통과한 바이너리만 실행. --root에서는 검사한 파일 디스크립터를 직접 실행한다."""
     base = os.path.basename(path).lower()
-    if sapi in ("apache",):
+    if sapi == "apache":
         return None
-    if base.startswith("frankenphp"):
-        code, out = run([path, "version"])
-    else:
-        code, out = run([path, "-n", "-v"])
+    handle = open_regular(path, 120 * 1024 * 1024, root) if root else None
+    if root and handle is None:
+        return None
+    try:
+        executable = path
+        descriptors = ()
+        if handle is not None and os.name != "nt" and sys.platform.startswith("linux"):
+            descriptors = (handle.fileno(),)
+            executable = "/proc/self/fd/" + str(handle.fileno())
+        arguments = ["version"] if base.startswith("frankenphp") else ["-n", "-v"]
+        code, out = run([executable] + arguments, pass_fds=descriptors)
+    finally:
+        if handle is not None:
+            handle.close()
     if code is None:
         return None
     match = re.search(r"PHP\s+(\d+\.\d+\.\d+\S*)", out) or re.search(r"(\d+\.\d+\.\d+\S*)", out)
@@ -566,14 +918,10 @@ def exec_version(path, sapi):
 _POWERED_BY_RE = re.compile(rb"X-Powered-By: PHP/(\d+\.\d+\.\d+[A-Za-z0-9._+~-]*)")
 
 
-def binary_version(path, limit=120 * 1024 * 1024):
-    """바이너리를 실행하지 않고 'X-Powered-By: PHP/x.y.z' 문자열에서 버전을 읽는다 (--no-exec 용). 없으면 None."""
-    try:
-        if os.path.getsize(path) > limit:
-            return None
-        with open(path, "rb") as handle:
-            data = handle.read()
-    except OSError:
+def binary_version(path, limit=120 * 1024 * 1024, root=None):
+    """실행 없이 크기가 제한된 일반 파일에서 버전 표지를 읽는다."""
+    data = read_bytes(path, min(limit, 120 * 1024 * 1024), root)
+    if data is None:
         return None
     match = _POWERED_BY_RE.search(data)
     return match.group(1).decode("ascii", "replace") if match else None
@@ -585,6 +933,8 @@ def package_owner(path, pkg):
         code, out = run(["dpkg", "-S", path])
         if code == 0 and ":" in out:
             name = out.split(":", 1)[0].split(",")[0].strip().split(":")[0]
+            if not valid_package(name):
+                return None, None
             _, version = run(["dpkg-query", "-W", "-f=${Version}", name])
             return name, (version or "").strip() or None
     elif pkg in ("dnf", "yum", "zypper"):
@@ -610,30 +960,56 @@ def package_owner(path, pkg):
 
 
 def vendor_changelog(pkg_manager, name, root=None):
-    """패키지 변경 이력 텍스트 (없으면 None)."""
-    if not name:
+    """deb/rpm 패키지 변경 이력만 읽는다. 압축 해제 크기도 제한한다."""
+    if not name or not valid_package(name):
         return None
     if pkg_manager == "apt":
         for doc in ("changelog.Debian.gz", "changelog.gz"):
-            path = under(root, "/usr/share/doc/%s/%s" % (name, doc))
-            if os.path.isfile(path):
+            handle = open_regular(under(root, "/usr/share/doc/%s/%s" % (name, doc)), 2000000, root)
+            if handle is not None:
                 try:
-                    with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
-                        return handle.read(4000000)
-                except OSError:
+                    with handle, gzip.GzipFile(fileobj=handle) as compressed:
+                        raw = compressed.read(2000001)
+                    if len(raw) > 2000000:
+                        return None
+                    return "\n".join(line[:4096] for line in raw.decode("utf-8", "replace").splitlines())
+                except (OSError, EOFError):
                     return None
-    elif pkg_manager in ("dnf", "yum", "zypper"):
+    elif not root and pkg_manager in ("dnf", "yum", "zypper"):
         code, out = run(["rpm", "-q", "--changelog", name], timeout=20)
-        if code == 0:
+        if code == 0 or out:
             return out
     return None
+
+
+def vendor_evidence_lines(changelog, advisory):
+    """문서의 임의 언급이 아닌 Debian/rpm 변경 이력 엔트리 내부의 근거만 인정."""
+    entries, current = [], None
+    for raw in (changelog or "").splitlines():
+        line = raw[:4096]
+        header = (re.match(r"^[A-Za-z0-9][A-Za-z0-9+_.-]* \([^)]+\) [^;]+; urgency=", line) or
+                  re.match(r"^\* [A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{4} .+ - \S+", line))
+        if header:
+            current = []
+            entries.append(current)
+        elif line.startswith(" -- "):
+            current = None
+        elif current is not None:
+            current.append(line)
+    evidence = []
+    required = advisory["vendor_patch_evidence_cves"]
+    for entry in entries:
+        matched = [line for line in entry if any(cve in line.upper() for cve in required)]
+        if all(any(cve in line.upper() for line in matched) for cve in required) and not any(
+                re.search(r"\b(not (?:yet )?fixed|unfixed|pending|unpatched)\b", line, re.I) for line in matched):
+            evidence.extend(clean(line.strip()) for line in matched)
+    return evidence
 
 
 def has_vendor_evidence(changelog, advisory):
     if not changelog:
         return "unknown"
-    text = changelog.upper()
-    return "yes" if all(cve.upper() in text for cve in advisory["vendor_patch_evidence_cves"]) else "no"
+    return "yes" if vendor_evidence_lines(changelog, advisory) else "no"
 
 
 # --- 설정 점검 -------------------------------------------------------------------
@@ -657,7 +1033,7 @@ def normalize(key, raw):
 
 
 def size_bytes(value):
-    match = re.fullmatch(r"\s*(-?\d+)\s*([kKmMgG]?)[bB]?\s*", value or "")
+    match = re.fullmatch(r"(-?\d+)\s*([kKmMgG]?)[bB]?", (value or "")[:4096].strip())
     if not match:
         return None
     number = int(match.group(1))
@@ -669,19 +1045,19 @@ def parse_ini(text, source):
     """php.ini 류 파일에서 관심 키만 {key: (value, source)} 로."""
     result = {}
     for line in (text or "").splitlines():
-        line = line.strip()
+        line = line[:4096].strip()
         if not line or line[0] in ";#[":
             continue
         key, sep, value = line.partition("=")
         key = key.strip()
         if sep and key in INI_KEYS:
-            value = re.split(r"\s+;", value, maxsplit=1)[0]
+            value = value.partition(";")[0]
             result[key] = (normalize(key, value), source)
     return result
 
 
-_POOL_RE = re.compile(r"^\s*(php_admin_value|php_admin_flag|php_value|php_flag)\s*\[\s*([\w.]+)\s*\]\s*=\s*(.*?)\s*$")
-_APACHE_RE = re.compile(r"^\s*(php_admin_value|php_admin_flag|php_value|php_flag)\s+([\w.]+)\s+(.*?)\s*$")
+_POOL_RE = re.compile(r"^(php_admin_value|php_admin_flag|php_value|php_flag)\s*\[\s*([\w.]+)\s*\]\s*=\s*(.*)$")
+_APACHE_RE = re.compile(r"^(php_admin_value|php_admin_flag|php_value|php_flag)\s+([\w.]+)\s+(.*)$")
 
 
 def parse_pool_or_vhost(text, source, apache=False):
@@ -689,6 +1065,7 @@ def parse_pool_or_vhost(text, source, apache=False):
     pattern = _APACHE_RE if apache else _POOL_RE
     result = {}
     for line in (text or "").splitlines():
+        line = line[:4096].strip()
         if line.lstrip().startswith(("#", ";")):
             continue
         match = pattern.match(line)
@@ -698,12 +1075,12 @@ def parse_pool_or_vhost(text, source, apache=False):
     return result
 
 
-def config_files(root, branch_hint=None):
+def config_files(root, branch_hint=None, notes=None):
     """SAPI별 ini / pool / apache 설정 파일 후보. 반환: {sapi: {"ini":[...], "pool":[...], "apache":[...]}}"""
     def g(*patterns):
         files = []
         for pattern in patterns:
-            files.extend(sorted(glob.glob(under(root, pattern))))
+            files.extend(sorted(safe_glob(root, pattern, notes)))
         return files
 
     result = {"fpm": {"ini": [], "pool": [], "apache": []}, "cgi": {"ini": [], "pool": [], "apache": []},
@@ -725,19 +1102,19 @@ def config_files(root, branch_hint=None):
     return result
 
 
-def evaluate_config(sapi, branch, files):
+def evaluate_config(sapi, branch, files, root=None):
     """정적으로 읽은 설정으로 임시 완화 적용 상태를 계산한다. 웹 요청별 실제 값은 알 수 없다."""
     states = {}
     for path in files.get("ini", []):
-        for key, (value, source) in parse_ini(read_text(path), path).items():
+        for key, (value, source) in parse_ini(read_text(path, root=root), path).items():
             states[key] = {"value": value, "source": source, "admin_locked": False}
     if sapi in ("fpm", "cgi"):
         for path in files.get("pool", []):
-            for key, (value, source, admin) in parse_pool_or_vhost(read_text(path), path).items():
+            for key, (value, source, admin) in parse_pool_or_vhost(read_text(path, root=root), path).items():
                 states[key] = {"value": value, "source": source, "admin_locked": admin}
     if sapi == "apache":
         for path in files.get("apache", []):
-            for key, (value, source, admin) in parse_pool_or_vhost(read_text(path), path, apache=True).items():
+            for key, (value, source, admin) in parse_pool_or_vhost(read_text(path, root=root), path, apache=True).items():
                 states[key] = {"value": value, "source": source, "admin_locked": admin}
     for key in INI_KEYS:
         if key not in states:
@@ -770,10 +1147,14 @@ def real(path):
         return path
 
 
-def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root=False):
-    root = root if root and root != "/" else None
-    root_forced = bool(root) and not exec_in_root and not no_exec
-    no_exec = no_exec or root_forced  # 외부 파일시스템(--root)의 바이너리는 호스트에서 실행하지 않는 것이 기본이다.
+def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_mode="auto"):
+    if exec_mode not in ("auto", "never", "all"):
+        raise ValueError("exec_mode must be auto, never, or all")
+    root = os.path.realpath(root) if root else None
+    root_forced = bool(root) and exec_mode != "all" and not no_exec
+    policy = ("never" if no_exec or exec_mode == "never" or root_forced else
+              "all" if exec_mode == "all" or not privileged() else "trusted-only")
+    no_exec = policy == "never"
     info = detect_platform(root)
     if root:
         processes, denied = [], False
@@ -782,8 +1163,11 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
         processes, denied = (runner_processes or live_processes)()
         process_visibility = "limited" if denied else "full"
     candidates = {}
-    for path in discover_files(root):
-        candidates.setdefault(real(path), {"path": path, "pids": [], "units": set(), "start": None, "deleted": False})
+    scan_notes = []
+    for path in discover_files(root, scan_notes):
+        resolved = resolve_inside(root, path) if root else real(path)
+        if resolved:
+            candidates.setdefault(resolved, {"path": resolved if root else path, "pids": [], "units": set(), "start": None, "deleted": False})
     for proc in processes:
         path = proc.get("module") if proc["kind"] == "apache" else proc.get("exe")
         if not path:
@@ -791,7 +1175,7 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
         key = real(path) if os.path.exists(path) else path
         entry = candidates.setdefault(key, {"path": path, "pids": [], "units": set(), "start": None, "deleted": False})
         entry["pids"].append(proc["pid"])
-        if proc.get("unit"):
+        if proc.get("unit") and (proc["unit"] == "container" or valid_unit(proc["unit"])):
             entry["units"].add(proc["unit"])
         if proc.get("start") and (entry["start"] is None or proc["start"] < entry["start"]):
             entry["start"] = proc["start"]
@@ -802,14 +1186,24 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
         entry = candidates[key]
         path = entry["path"]
         alias = None
-        if not root and os.path.islink(path):
-            resolved = real(path)  # /usr/bin/php -> /etc/alternatives/php -> /usr/bin/php8.3 : 패키지는 실제 파일의 소유자다
+        if not root:
+            resolved = real(path)  # 마지막 파일뿐 아니라 부모 디렉터리 링크도 제거한 경로만 실행한다.
             if resolved != path and os.path.exists(resolved):
                 alias, path = path, resolved
         sapi = sapi_from_name(path)
         version, version_source = None, None
-        if not no_exec and sapi != "apache" and os.path.exists(path):
-            version = exec_version(path, sapi)
+        executed = False
+        exec_note = None
+        allowed = not no_exec and not entry["deleted"] and (policy == "all" or trusted_binary(path))
+        if no_exec:
+            exec_note = "실행 안 함: --root 기본 정책(--exec 로 변경)" if root_forced else "실행 안 함: --no-exec"
+        elif entry["deleted"]:
+            exec_note = "실행 안 함: 삭제된 프로세스 바이너리"
+        elif not allowed:
+            exec_note = "실행 안 함: 신뢰할 수 없는 위치(쓰기 가능하거나 소유자가 root/관리자가 아님)"
+        if allowed and sapi != "apache" and _is_binary_candidate(path):
+            executed = True
+            version = exec_version(path, sapi, root)
             version_source = "exec" if version else None
         package, package_version = (None, None)
         if not root:
@@ -818,8 +1212,13 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
             version = package_version
             version_source = "package"
         if not version and os.path.isfile(path):
-            version = binary_version(path)
+            version = binary_version(path, root=root)
             version_source = "binary-string" if version else version_source
+        if not version and os.name == "nt":
+            code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                             "(Get-Item -LiteralPath %s).VersionInfo.ProductVersion" % ps_literal(path)])
+            if code == 0 and parse_version(out):
+                version, version_source = out.strip(), "file-version"
         changelog = vendor_changelog(info["pkg"], package, root)
         parsed = parse_version(version or "")
         cls = classify(version or "", advisory)
@@ -829,7 +1228,9 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
             vendor = "unknown"
         verdict = verdict_for(cls, vendor)
         needs_restart = None
-        notes = []
+        notes = [exec_note] if exec_note else []
+        if vendor == "yes":
+            notes.extend("벤더 변경 이력 근거: " + line for line in vendor_evidence_lines(changelog, advisory))
         if entry["pids"]:
             needs_restart = False
             try:
@@ -852,12 +1253,12 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
             "exposure": "cli" if sapi == "cli" else "web", "running": bool(entry["pids"]),
             "pids": sorted(entry["pids"]), "units": sorted(entry["units"]), "package": package,
             "vendor_patch": vendor, "needs_restart": needs_restart, "notes": notes,
-            "version_source": version_source,
+            "version_source": version_source, "exec_note": exec_note, "executed": executed,
         }
         if sapi in ("fpm", "cgi", "apache") and parsed:
             branch = "%d.%d" % (parsed[0], parsed[1])
-            files = config_files(root).get(sapi, {})
-            installation["mitigation"] = evaluate_config(sapi, branch, files)
+            files = config_files(root, notes=scan_notes).get(sapi, {})
+            installation["mitigation"] = evaluate_config(sapi, branch, files, root)
             installation["mitigation"]["branch"] = branch
         installations.append(installation)
     summary = {"vulnerable": 0, "fixed": 0, "vendor_patched": 0, "eol": 0, "unknown": 0, "needs_restart": 0}
@@ -870,7 +1271,7 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
         exit_code = 1
     elif not installations and process_visibility == "limited":
         exit_code = 3
-    elif summary["unknown"] and not (summary["fixed"] + summary["vendor_patched"]):
+    elif summary["unknown"]:
         exit_code = 3
     else:
         exit_code = 0
@@ -878,7 +1279,9 @@ def scan(advisory, root=None, no_exec=False, runner_processes=None, exec_in_root
         "tool": TOOL, "tool_version": __version__, "as_of": advisory["as_of"], "host": socket.gethostname(),
         "platform": info["pretty"], "package_manager": info["pkg"], "container": info["container"],
         "process_visibility": process_visibility, "installations": installations, "summary": summary,
-        "exit_code": exit_code,
+        "exit_code": exit_code, "exec_policy": policy, "notes": sorted(set(scan_notes)),
+        "advisory_source": getattr(advisory, "source", {"path": "provided-api", "sha256": hashlib.sha256(
+            json.dumps(advisory, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest(), "custom": True}),
     }, info
 
 
@@ -908,7 +1311,7 @@ def detect_webservers(root=None):
               ("litespeed", ("/usr/local/lsws/conf/httpd_config.xml",)),
               ("iis", ("C:\\Windows\\System32\\inetsrv\\config\\applicationHost.config",)))
     for name, paths in checks:
-        if any(os.path.exists(under(root, path)) for path in paths):
+        if any((resolve_inside(root, under(root, path)) if root else os.path.exists(path)) for path in paths):
             found.append(name)
     return found
 
@@ -966,7 +1369,7 @@ def recommend(sit, mode):
 
 def _update_steps(sit, info):
     pkg = info.get("pkg")
-    packages = sorted({i["package"] for i in sit["bad"] if i["package"]})
+    packages = sorted({i["package"] for i in sit["bad"] if i["package"] and valid_package(i["package"])})
     names = " ".join(shlex.quote(name) for name in packages) if packages else None
     if pkg == "windows":
         return ["https://windows.php.net/download 에서 수정 버전 ZIP 을 받아 페이지의 SHA256 과 대조 (Apache 는 Thread Safe, IIS FastCGI 는 Non Thread Safe)",
@@ -1077,8 +1480,10 @@ def option_detail(option, sit, info, advisory, webservers):
         steps = []
         for item in sit["bad"] + sit["restart"]:
             for unit in item["units"]:
-                steps.append("컨테이너 이미지를 재배포 (컨테이너 안에서 재시작만으로는 새 이미지가 되지 않음)" if unit == "container"
-                             else "sudo systemctl restart %s" % shlex.quote(unit))
+                if unit == "container":
+                    steps.append("컨테이너 이미지를 재배포 (컨테이너 안에서 재시작만으로는 새 이미지가 되지 않음)")
+                elif valid_unit(unit):
+                    steps.append("sudo systemctl restart %s" % shlex.quote(unit))
         steps = sorted(set(steps)) or ["PHP 를 쓰는 모든 서비스(PHP-FPM, Apache mod_php, php-cgi, FrankenPHP, LiteSpeed)를 재시작"]
         steps += ["확인: 이 도구를 다시 실행하거나 웹 프로세스의 /proc/<pid>/exe 와 시작 시각을 확인 (`php -v` 는 CLI 만 보여 줍니다)",
                   "침해가 의심되면 재시작 전에 증거(로그, 프로세스 목록, 네트워크 연결)를 먼저 보존"]
@@ -1105,7 +1510,91 @@ def build_response(result, info, advisory, mode="online", uploads="unknown", roo
     }
 
 
-def emit_virtual_patch(out_dir, uploads):
+def safe_parent(path):
+    """출력 부모를 0700으로 만들고 링크를 거부한다. POSIX에서는 dirfd로 경쟁을 막는다."""
+    absolute = os.path.abspath(path)
+    if sys.platform == "darwin":
+        # macOS의 root 소유 OS 별칭만 허용한다. 사용자 제공 부모 링크는 계속 거부한다.
+        for alias in ("/var", "/tmp", "/etc"):
+            if absolute.startswith(alias + "/") and os.path.islink(alias) and os.lstat(alias).st_uid == 0:
+                absolute = os.path.realpath(alias) + absolute[len(alias):]
+    parent, name = os.path.dirname(absolute), os.path.basename(absolute)
+    if not name:
+        raise ValueError("출력 파일 이름이 없습니다")
+    if os.name == "nt":
+        drive, rest = os.path.splitdrive(parent)
+        current = drive + os.sep
+        for component in rest.strip(os.sep).split(os.sep):
+            if not component:
+                continue
+            current = os.path.join(current, component)
+            try:
+                os.mkdir(current, 0o700)
+            except FileExistsError:
+                pass
+            info = os.lstat(current)
+            if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise OSError("출력 경로 링크/재분석 지점 거부: " + clean(current))
+        return None, absolute
+    # 각 부모는 NOFOLLOW로 열어 검사 이후 바꿔치기도 거부한다.
+    directory = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in parent.strip(os.sep).split(os.sep):
+            if not component:
+                continue
+            try:
+                os.mkdir(component, 0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        return directory, name
+    except BaseException:
+        os.close(directory)
+        raise
+
+
+def safe_write(path, text, force=False, script=False, encoding="utf-8"):
+    """기존 파일은 명시적 force로만 교체. 링크는 force로도 거부하고 절대 truncate하지 않는다."""
+    directory, target = safe_parent(path)
+    kwargs = {"dir_fd": directory} if directory is not None else {}
+    fd = None
+    try:
+        try:
+            existing = os.stat(target, follow_symlinks=False, **kwargs)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if not force or not stat.S_ISREG(existing.st_mode) or getattr(existing, "st_file_attributes", 0) & 0x400:
+                raise FileExistsError("기존 파일/링크를 덮어쓰지 않습니다 (--force): " + clean(path))
+            os.unlink(target, **kwargs)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        fd = os.open(target, flags, 0o700 if script else 0o600, **kwargs)
+        if os.name != "nt":
+            os.fchmod(fd, 0o700 if script else 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(text.encode(encoding))
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if directory is not None:
+            os.close(directory)
+
+
+def display_data(value, markdown=False):
+    """구조는 유지하되 모든 동적 표시 문자열을 먼저 정리한다. JSON에는 적용하지 않는다."""
+    if isinstance(value, str):
+        return markdown_value(value) if markdown else clean(value)
+    if isinstance(value, dict):
+        return {key: display_data(child, markdown) for key, child in value.items()}
+    if isinstance(value, list):
+        return [display_data(child, markdown) for child in value]
+    return value
+
+
+def emit_virtual_patch(out_dir, uploads, force=False):
     """저장소의 virtual-patch/ 템플릿에 값을 채워 out_dir 로 복사한다. 점검 대상 서버 설정은 건드리지 않는다."""
     here = os.path.dirname(os.path.abspath(__file__))
     source = os.path.join(here, "virtual-patch")
@@ -1121,22 +1610,29 @@ def emit_virtual_patch(out_dir, uploads):
                 continue
             src = os.path.join(folder, name)
             dst = os.path.join(out_dir, os.path.relpath(src, source))
-            with open(src, "r", encoding="utf-8") as handle:
-                text = handle.read()
+            text = read_text(src)
+            if text is None:
+                raise OSError("템플릿을 읽을 수 없습니다: " + clean(src))
             for token, value in tokens.items():
                 text = text.replace(token, value)
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with open(dst, "w", encoding="utf-8") as handle:
-                handle.write(text)
+            safe_write(dst, text, force=force)
             written.append(dst)
     return sorted(written)
 
 
 # --- 출력 ------------------------------------------------------------------------
 def render_text(result, response, advisory):
+    result, response, advisory = [display_data(value) for value in (result, response, advisory)]
     lines = ["PHP2Shell 점검 (%s) — %s, %s, 권고 기준일 %s" % (TOOL, result["host"], result["platform"], advisory["as_of"]),
-             "대상 CVE: %s (CVSS v4.0 %s). 읽기 전용 점검이며 서버를 바꾸지 않습니다." % (", ".join(advisory["cves"]), advisory["cvss_v4"]),
+             "대상 CVE: %s (CVSS v4.0 %s). 서버 설정·패키지를 바꾸지 않습니다. 신뢰할 수 있는 PHP 바이너리만 -n -v 로 실행합니다(--no-exec 로 끌 수 있음)." % (", ".join(advisory["cves"]), advisory["cvss_v4"]),
              ""]
+    source = result.get("advisory_source")
+    if source:
+        lines.append("권고 데이터: %s / SHA256 %s" % (source["path"], source["sha256"]))
+        if source.get("custom"):
+            lines.append("주의: 사용자 지정 권고 데이터입니다. 출처와 SHA256을 별도 경로로 확인하세요.")
+    lines.append("바이너리 실행 정책: " + result.get("exec_policy", "unknown"))
+    lines.extend("주의: " + note for note in result.get("notes", []))
     if result["process_visibility"] == "limited":
         lines.append("주의: 일부 프로세스를 읽지 못했습니다. root 권한으로 다시 실행하면 더 정확합니다.")
     if not result["installations"]:
@@ -1169,7 +1665,7 @@ def render_text(result, response, advisory):
     elif result["exit_code"] == 1:
         lines.append("판정: 조치가 필요합니다. 임시 완화는 완전한 해결이 아닙니다.")
     if response and response["recommended"]:
-        lines += ["", "=== 권장 대응 순서 (시스템 분석 기준 / 이 도구는 아무것도 실행하지 않습니다) ==="]
+        lines += ["", "=== 권장 대응 순서 (시스템 분석 기준 / 조치는 자동 실행하지 않습니다) ==="]
         for index, item in enumerate(response["recommended"], 1):
             lines.append("%d. %s" % (index, item["title"]))
             lines += ["     이유: " + reason for reason in item["why"]]
@@ -1184,12 +1680,22 @@ def render_text(result, response, advisory):
 
 
 def render_markdown(result, response, advisory):
+    result, response, advisory = [display_data(value, markdown=True) for value in (result, response, advisory)]
     lines = ["# PHP2Shell 점검 보고", "", "- 호스트: `%s` / %s" % (result["host"], result["platform"]),
              "- 권고 기준일: %s / CVE: %s" % (advisory["as_of"], ", ".join(advisory["cves"])),
              "- 종료 코드: %d" % result["exit_code"], "", "| 판정 | 경로 | 버전 | SAPI | 실행 중 | 재시작 필요 |", "| --- | --- | --- | --- | --- | --- |"]
     for item in result["installations"]:
         lines.append("| %s | `%s` | %s | %s | %s | %s |" % (VERDICT_KO[item["verdict"]], item["path"], item["version"] or "-", item["sapi"],
                                                          "예" if item["running"] else "아니오", {True: "예", False: "아니오", None: "-"}[item["needs_restart"]]))
+    lines.append("")
+    for item in result["installations"]:
+        lines.extend("- 근거/주의 (%s): %s" % (item["path"], note) for note in item.get("notes", []))
+    source = result.get("advisory_source")
+    if source:
+        lines += ["", "- 권고 데이터: %s / SHA256 %s" % (source["path"], source["sha256"])]
+        if source.get("custom"):
+            lines.append("- 주의: 사용자 지정 권고 데이터. 출처와 SHA256을 별도 경로로 확인하세요.")
+    lines.extend("- 주의: " + note for note in result.get("notes", []))
     if response and response["recommended"]:
         lines += ["", "## 권장 대응 순서"]
         for index, item in enumerate(response["recommended"], 1):
@@ -1235,14 +1741,15 @@ PLAN_GUARD_EXIT = 64
 def _plan_context(result, info):
     items = result["installations"]
     bad = [i for i in items if i["verdict"] in ("vulnerable", "eol")]
+    dirname = ntpath.dirname if info.get("pkg") == "windows" else os.path.dirname
     ctx = {
         "bad": bad,
-        "packages": sorted({i["package"] for i in bad if i["package"]}),
-        "units": sorted({u for i in items if i["running"] for u in i["units"] if u != "container"}),
+        "packages": sorted({i["package"] for i in bad if i["package"] and valid_package(i["package"])}),
+        "units": sorted({u for i in items if i["running"] for u in i["units"] if valid_unit(u)}),
         "container": bool(info.get("container")) or any("container" in i["units"] for i in items),
         "unpackaged": [i for i in bad if not i["package"]],
         "config_dirs": sorted({os.path.dirname(f) for i in items for f in (i.get("mitigation") or {}).get("files", [])}),
-        "install_dirs": sorted({os.path.dirname(i["path"]) for i in items}),
+        "install_dirs": sorted({dirname(i["path"]) for i in items}),
         "log_dirs": [p for p in ("/var/log/apache2", "/var/log/httpd", "/var/log/nginx", "/var/log/php-fpm", "/var/log/php") if os.path.isdir(p)],
         "pkg": info.get("pkg"),
     }
@@ -1259,12 +1766,14 @@ def build_patch_plan(result, info, advisory, mode="online"):
     if windows:
         steps.append({"title": "침해 의심 시 증거 먼저 보존 (의심이 없으면 건너뜀)", "notes": [
             "침해가 의심되면 재시작·교체 전에 이 단계를 먼저 하세요 (KISA 수칙 7: 서버를 재시작하면 메모리 흔적이 사라집니다)."], "commands": [
-            "$ev = \".\\php2shell-evidence-$(Get-Date -Format yyyyMMdd-HHmmss)\"; New-Item -ItemType Directory -Path $ev | Out-Null",
+            "$ev = \".\\php2shell-evidence-$(Get-Date -Format yyyyMMdd-HHmmss)\"; New-Item -ItemType Directory -Path $ev -ErrorAction Stop | Out-Null",
+            "& \"$env:SystemRoot\\System32\\icacls.exe\" $ev /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F'; if ($LASTEXITCODE -ne 0) { throw 'Evidence ACL failed' }",
             "Get-Process | Select-Object Id,ProcessName,Path,StartTime | Export-Csv \"$ev\\processes.csv\" -NoTypeInformation",
             "Get-NetTCPConnection | Export-Csv \"$ev\\tcp.csv\" -NoTypeInformation",
             "Copy-Item 'C:\\inetpub\\logs\\LogFiles' -Destination $ev -Recurse -ErrorAction SilentlyContinue",
             "Get-ChildItem $ev -Recurse -File | Get-FileHash -Algorithm SHA256 | Export-Csv \"$ev\\SHA256.csv\" -NoTypeInformation"]})
-        backups = ["Copy-Item -Recurse -Path '%s' -Destination '%s.bak-%s'" % (d, d, "$(Get-Date -Format yyyyMMdd)") for d in ctx["install_dirs"]]
+        backups = ["Copy-Item -Recurse -LiteralPath %s -Destination (%s + '.bak-' + (Get-Date -Format yyyyMMdd))" %
+                   (ps_literal(d), ps_literal(d)) for d in ctx["install_dirs"]]
         steps.append({"title": "현재 상태 기록·백업", "notes": ["PHP 폴더(php.ini 포함)를 통째로 백업합니다."], "commands": backups or ["# PHP 폴더를 찾지 못했습니다. 설치 경로를 직접 확인하세요."]})
         steps.append({"title": "수정 버전 내려받기 (수동)", "notes": [
             "https://windows.php.net/download 에서 수정 버전(%s)을 받습니다. Apache(mod_php)는 Thread Safe, IIS FastCGI(php-cgi)는 Non Thread Safe." % ", ".join(
@@ -1283,13 +1792,15 @@ def build_patch_plan(result, info, advisory, mode="online"):
             "Get-Process php-cgi,w3wp,httpd -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime   # 시작 시각이 교체 이후여야 함"]})
         return steps
     # ---- Linux / Unix / macOS ----
-    evidence = ["EV=\"./php2shell-evidence-$(date +%Y%m%d-%H%M%S)\"; mkdir -p \"$EV\"",
+    evidence = ["OLD_UMASK=$(umask); umask 077",
+                "EV=\"./php2shell-evidence-$(date +%Y%m%d-%H%M%S)\"; mkdir -m 700 \"$EV\" || exit 2",
                 "ps -eo pid,ppid,lstart,user,args > \"$EV/ps.txt\"",
                 "(ss -tanp 2>/dev/null || netstat -anp 2>/dev/null || netstat -an) > \"$EV/network.txt\"",
                 "(last -n 50 2>/dev/null) > \"$EV/last.txt\""]
     for log_dir in ctx["log_dirs"]:
         evidence.append("cp -Rp %s \"$EV/\" 2>/dev/null || true" % shlex.quote(log_dir))
     evidence.append("(cd \"$EV\" && find . -type f -exec sha256sum {} + 2>/dev/null || find . -type f -exec shasum -a 256 {} +) > \"$EV/SHA256SUMS\"")
+    evidence.append("umask \"$OLD_UMASK\"")
     steps.append({"title": "침해 의심 시 증거 먼저 보존 (의심이 없으면 건너뜀)", "notes": [
         "침해가 의심되면 재시작·패치 전에 이 단계를 먼저 하세요 (KISA 수칙 7). 서버를 끄거나 재시작하면 메모리 흔적이 사라집니다.",
         "격리는 서버 종료가 아니라 외부 접속 차단으로 하고, 신고(KISA 118 / https://boho.or.kr)와 병행하세요."], "commands": evidence})
@@ -1297,10 +1808,10 @@ def build_patch_plan(result, info, advisory, mode="online"):
               "yum": "rpm -qa 'php*' | sort > \"$WORK/php-before.txt\"", "zypper": "rpm -qa 'php*' | sort > \"$WORK/php-before.txt\"",
               "apk": "apk info -v | grep -i php > \"$WORK/php-before.txt\"", "pkg": "pkg info | grep -i php > \"$WORK/php-before.txt\"",
               "brew": "brew list --versions | grep -i php > \"$WORK/php-before.txt\""}.get(pkg)
-    backup = ["mkdir -p \"$WORK\""]
+    backup = ["(umask 077; mkdir -p \"$WORK\"); chmod 700 \"$WORK\""]
     if before:
         backup.append(before)
-    existing = [d for d in ctx["config_dirs"] if os.path.isdir(d)]
+    existing = [d for d in ctx["config_dirs"] if clean(d) == d and os.path.isdir(d)]
     if existing:
         backup.append("tar czf \"$WORK/php-config-backup.tgz\" " + " ".join(shlex.quote(d) for d in existing) + " 2>/dev/null")
     else:
@@ -1355,93 +1866,87 @@ def build_patch_plan(result, info, advisory, mode="online"):
 
 def render_plan_sh(steps, result, advisory):
     lines = ["#!/bin/sh",
-             "# php2shell-triage 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" % (result["host"], result["platform"], advisory["as_of"]),
-             "# 자동 패치가 아닙니다. 체계관리자가 각 명령을 검토한 뒤 직접 실행하며, 패치의 책임은 관리자에게 있습니다.",
-             "# 이 파일은 점검 시점의 분석에 맞춘 것입니다. 환경이 바뀌었다면 도구를 다시 실행해 새로 생성하세요.",
-             "# 검토를 마쳤다면:  %s=yes sh <이 파일>" % PLAN_GUARD_ENV,
              "if [ \"${%s:-}\" != \"yes\" ]; then" % PLAN_GUARD_ENV,
-             "    echo \"이 스크립트는 자동 실행용이 아닙니다. 각 단계를 검토한 뒤 직접 실행하세요 (%s=yes 필요).\" >&2" % PLAN_GUARD_ENV,
+             "    echo '자동 실행용이 아닙니다. PHP2SHELL_I_REVIEWED=yes 필요.' >&2",
              "    exit %d" % PLAN_GUARD_EXIT,
              "fi",
+             "# php2shell-triage 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" %
+             (clean(result["host"]), clean(result["platform"]), clean(advisory["as_of"])),
+             "# 자동 패치가 아닙니다. 각 명령을 검토하고 직접 실행하며 책임은 관리자에게 있습니다.",
              "set -u",
              "WORK=\"${PHP2SHELL_WORKDIR:-./php2shell-work-$(date +%Y%m%d-%H%M%S)}\"",
-             "confirm() { printf '%s [y/N] ' \"$1\"; read -r ans || ans=n; case \"$ans\" in y|Y|yes|YES) return 0 ;; *) echo '  -> 건너뜀'; return 1 ;; esac; }",
-             ""]
+             "confirm() { printf '%s [y/N] ' \"$1\"; read -r ans || ans=n; case \"$ans\" in y|Y|yes|YES) return 0 ;; *) echo '  -> 건너뜀'; return 1 ;; esac; }", ""]
     for number, step in enumerate(steps):
-        lines.append("echo '=== 단계 %d: %s ==='" % (number, step["title"].replace("'", "")))
-        lines += ["# " + note for note in step["notes"]]
+        lines.append("printf '%s\\n' " + shlex.quote(clean("=== 단계 %d: %s ===" % (number, step["title"]))))
         lines.append("if confirm '이 단계를 실행할까요?'; then")
-        lines.append("    :   # 비어 있는 단계도 문법이 유지되도록 하는 no-op")
-        for command in step["commands"]:
-            lines.append("    " + command)
-        lines.append("fi")
-        lines.append("")
+        lines.append("    :")
+        lines.extend("    printf '%s\\n' " + shlex.quote(clean(note)) for note in step["notes"])
+        lines.extend("    " + clean(command) for command in step["commands"])
+        lines += ["fi", ""]
     return "\n".join(lines)
 
 
 def render_plan_ps1(steps, result, advisory):
-    lines = ["# php2shell-triage 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" % (result["host"], result["platform"], advisory["as_of"]),
-             "# 자동 패치가 아닙니다. 체계관리자가 각 명령을 검토한 뒤 직접 실행하며, 패치의 책임은 관리자에게 있습니다.",
-             "# 검토를 마쳤다면:  $env:%s='yes'; .\\<이 파일>" % PLAN_GUARD_ENV,
-             "if ($env:%s -ne 'yes') {" % PLAN_GUARD_ENV,
-             "    Write-Host '이 스크립트는 자동 실행용이 아닙니다. 각 단계를 검토한 뒤 직접 실행하세요 (%s=yes 필요).'" % PLAN_GUARD_ENV,
+    lines = ["if ($env:%s -ne 'yes') {" % PLAN_GUARD_ENV,
+             "    Write-Host '자동 실행용이 아닙니다. PHP2SHELL_I_REVIEWED=yes 필요.'",
              "    exit %d" % PLAN_GUARD_EXIT,
              "}",
-             "function Confirm-Step([string]$Message) { $a = Read-Host \"$Message [y/N]\"; return ($a -match '^(y|yes)$') }",
-             ""]
+             "# php2shell-triage 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" %
+             (clean(result["host"]), clean(result["platform"]), clean(advisory["as_of"])),
+             "# 자동 패치가 아닙니다. 각 명령을 검토하고 직접 실행하며 책임은 관리자에게 있습니다.",
+             "function Confirm-Step([string]$Message) { $a = Read-Host \"$Message [y/N]\"; return ($a -match '^(y|yes)$') }", ""]
     for number, step in enumerate(steps):
-        lines.append("Write-Host '=== 단계 %d: %s ==='" % (number, step["title"].replace("'", "")))
-        lines += ["# " + note for note in step["notes"]]
+        lines.append("Write-Host " + ps_literal("=== 단계 %d: %s ===" % (number, step["title"])))
         lines.append("if (Confirm-Step '이 단계를 실행할까요?') {")
-        for command in step["commands"]:
-            lines.append("    " + command)
-        lines.append("}")
-        lines.append("")
+        lines.extend("    Write-Host " + ps_literal(note) for note in step["notes"])
+        lines.extend("    " + clean(command) for command in step["commands"])
+        lines += ["}", ""]
     return "\n".join(lines)
 
 
 def render_plan_md(steps, result, advisory):
+    result, advisory = [display_data(value, markdown=True) for value in (result, advisory)]
     lines = ["# 맞춤 패치 계획", "",
              "- 대상: `%s` / %s (권고 기준일 %s, 대상 CVE %s)" % (result["host"], result["platform"], advisory["as_of"], ", ".join(advisory["cves"])),
              "- 이 문서와 스크립트는 **자동 패치가 아닙니다.** 체계관리자가 검토하고 직접 실행하며 패치의 책임은 관리자에게 있습니다.", ""]
     for number, step in enumerate(steps):
-        lines += ["## 단계 %d. %s" % (number, step["title"]), ""] + ["- " + note for note in step["notes"]] + ["", "```"] + step["commands"] + ["```", ""]
+        lines += ["## 단계 %d. %s" % (number, markdown_value(step["title"])), ""] + [
+            "- " + markdown_value(note) for note in step["notes"]] + ["", "```"] + [
+            clean(command).replace("`", "&#96;") for command in step["commands"]] + ["```", ""]
     return "\n".join(lines)
 
 
-def emit_patch_plan(out_dir, result, info, advisory, mode="online", fmt="auto"):
+def emit_patch_plan(out_dir, result, info, advisory, mode="online", fmt="auto", force=False):
     steps = build_patch_plan(result, info, advisory, mode)
-    os.makedirs(out_dir, exist_ok=True)
     written = []
     windows = info.get("pkg") == "windows"
     kind = fmt if fmt != "auto" else ("ps1" if windows else "sh")
     path = os.path.join(out_dir, "patch-plan.md")
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(render_plan_md(steps, result, advisory) + "\n")
+    safe_write(path, render_plan_md(steps, result, advisory) + "\n", force=force)
     written.append(path)
     if kind in ("sh", "ps1"):
         if (kind == "ps1") != windows:
             steps = build_patch_plan(result, dict(info, pkg="windows" if kind == "ps1" else info.get("pkg")), advisory, mode)
         path = os.path.join(out_dir, "patch-plan." + kind)
         text = render_plan_sh(steps, result, advisory) if kind == "sh" else render_plan_ps1(steps, result, advisory)
-        with open(path, "w", encoding="utf-8-sig" if kind == "ps1" else "utf-8") as handle:
-            handle.write(text + "\n")
-        if kind == "sh":
-            os.chmod(path, 0o750)
+        safe_write(path, text + "\n", force=force, script=True,
+                   encoding="utf-8-sig" if kind == "ps1" else "utf-8")
         written.append(path)
     return written
 
 
 # --- CLI -------------------------------------------------------------------------
 def build_parser():
-    parser = argparse.ArgumentParser(prog="php2shell_triage.py", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="php2shell_triage.py", description=__doc__.split("\n\n")[0],
+                                     epilog="서버 설정·패키지를 바꾸지 않습니다. 기본: 신뢰할 수 있는 PHP 바이너리만 -n -v 로 실행합니다. 의심되는 호스트에서는 --no-exec.")
     parser.add_argument("--json", action="store_true", help="JSON 출력")
     parser.add_argument("--format", choices=("text", "json", "md"), help="출력 형식 (기본 text)")
     parser.add_argument("--output", help="결과를 파일로 저장")
-    parser.add_argument("--no-exec", action="store_true", help="발견한 바이너리를 실행하지 않음 (패키지 DB로만 버전 확인)")
+    parser.add_argument("--no-exec", action="store_true", help="발견한 바이너리를 절대 실행하지 않음 (패키지 DB/정적 문자열 사용)")
     parser.add_argument("--root", help="점검 대상 파일시스템 루트 (오프라인 점검: 실행 중 프로세스 점검 생략, 바이너리는 기본적으로 실행하지 않음)")
-    parser.add_argument("--exec", dest="exec_in_root", action="store_true",
-                        help="--root 의 바이너리도 실행해 버전을 확인 (신뢰할 수 있는 트리일 때만; 의심 이미지는 쓰지 마세요)")
+    parser.add_argument("--exec", dest="force_exec", action="store_true",
+                        help="신뢰되지 않은 위치 및 --root 포함 모든 바이너리 실행 강제. 신뢰하는 호스트에서만 사용")
+    parser.add_argument("--force", action="store_true", help="기존 일반 출력 파일 교체 허용 (심볼릭 링크는 항상 거부)")
     parser.add_argument("--advisory", help="권고 데이터 JSON 경로 (기본: data/advisory.json 또는 내장본)")
     parser.add_argument("--no-response", action="store_true", help="대응 옵션 출력 생략")
     parser.add_argument("--mode", choices=("online", "offline"), default="online",
@@ -1460,8 +1965,7 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+def _main(args):
     advisory = load_advisory(args.advisory)
     if args.classify is not None:
         print(classify(args.classify, advisory))
@@ -1472,13 +1976,13 @@ def main(argv=None):
         print(render_catalog())
         return 0
     if args.emit_virtual_patch:
-        written = emit_virtual_patch(args.emit_virtual_patch, args.uploads)
+        written = emit_virtual_patch(args.emit_virtual_patch, args.uploads, force=args.force)
         print("가상 패치 파일 %d개를 %s 에 만들었습니다 (점검 대상 서버는 바꾸지 않았습니다). 적용 전에 반드시 테스트하세요."
-              % (len(written), args.emit_virtual_patch), file=sys.stderr)
-    result, info = scan(advisory, root=args.root, no_exec=args.no_exec, exec_in_root=args.exec_in_root)
+              % (len(written), clean(args.emit_virtual_patch)), file=sys.stderr)
+    result, info = scan(advisory, root=args.root, no_exec=args.no_exec, exec_mode="all" if args.force_exec else "auto")
     if args.emit_patch_plan:
-        planned = emit_patch_plan(args.emit_patch_plan, result, info, advisory, args.mode, args.plan_format)
-        print("맞춤 패치 계획을 만들었습니다 (자동 패치 아님, 관리자가 검토 후 직접 실행): %s" % ", ".join(planned), file=sys.stderr)
+        planned = emit_patch_plan(args.emit_patch_plan, result, info, advisory, args.mode, args.plan_format, force=args.force)
+        print("맞춤 패치 계획을 만들었습니다 (자동 패치 아님, 관리자가 검토 후 직접 실행): %s" % clean(", ".join(planned)), file=sys.stderr)
     response = None if args.no_response else build_response(result, info, advisory, args.mode, args.uploads, args.root)
     fmt = args.format or ("json" if args.json else "text")
     if fmt == "json":
@@ -1490,12 +1994,20 @@ def main(argv=None):
     else:
         body = render_text(result, response, advisory)
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as handle:
-            handle.write(body if body.endswith("\n") else body + "\n")
-        print("saved: %s" % args.output, file=sys.stderr)
+        safe_write(args.output, body if body.endswith("\n") else body + "\n", force=args.force)
+        print("saved: %s" % clean(args.output), file=sys.stderr)
     else:
         print(body)
     return result["exit_code"]
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    try:
+        return _main(args)
+    except (OSError, ValueError) as error:
+        print("오류: " + clean(error), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@
 # php2shell-quickcheck.sh - PHP2Shell (CVE-2026-109618 / CVE-2026-109619) 방어용 점검 도구 (POSIX sh)
 #
 # Python 이 없는 환경(오래된 CentOS 7, Alpine, BSD, 최소 컨테이너)용 대체 점검기입니다.
-# - 기본 동작은 읽기 전용입니다. 네트워크 호출, 설정 변경, 서비스 재시작을 하지 않습니다.
+# - 서버 설정·패키지를 바꾸지 않습니다. 신뢰할 수 있는 PHP 바이너리만 `-n -v` 로 실행합니다(--no-exec 로 끌 수 있음).
+# - 의심되는 호스트에서는 --no-exec 를 쓰세요. --exec 는 신뢰하는 호스트에서만 사용하세요.
 # - 조치 명령은 화면에 "출력"만 합니다. 실행하지 않습니다.
 # - 취약점을 유발하는 코드는 포함하지 않습니다.
 #
@@ -13,6 +14,42 @@
 
 LC_ALL=C
 export LC_ALL
+
+# 도구 탐색은 관리되는 시스템 경로로 고정하고 실제 호출도 절대 경로 함수로 묶습니다.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset CDPATH ENV BASH_ENV
+umask 077
+for helper in awk basename cat chmod date dirname env find getconf grep gzip head hostname id ls mkdir mktemp ps readlink rm rpm sed sleep sort stat sw_vers timeout tr uname wc zcat pkg procstat; do
+  for helper_dir in /usr/bin /bin /usr/sbin /sbin; do
+    if [ -f "$helper_dir/$helper" ] && [ -x "$helper_dir/$helper" ]; then
+      eval "$helper() { \"$helper_dir/$helper\" \"\$@\"; }"
+      [ "$helper" = env ] && ENV_BIN=$helper_dir/$helper
+      break
+    fi
+  done
+done
+EUID_NUM=$(id -u 2>/dev/null)
+[ -n "$EUID_NUM" ] || EUID_NUM=0
+
+# UTF-8 C1/NEL/행 구분과 ASCII 제어문자를 치환하고 한국어 UTF-8 은 유지합니다.
+clean_stream() {
+  tr '\000-\011\013-\037\177' '?' | awk '{ gsub(/\302[\200-\237]|\342\200[\250\251]/, "?"); print }'
+}
+clean_value() {
+  cv_text=$(printf '%sX' "$1" | clean_stream)
+  cv_text=${cv_text%X}
+  printf '%s' "$cv_text" | tr '\n' '?'
+}
+safe_name() {
+  case $1 in ''|*[!A-Za-z0-9._+:@-]*|-*|.*) return 1 ;; esac
+  return 0
+}
+safe_unit() {
+  safe_name "$1" || return 1
+  case $1 in *.service|*.socket) return 0 ;; esac
+  return 1
+}
 
 AS_OF="2026-10-23"
 TOOL="php2shell-quickcheck-sh"
@@ -29,17 +66,20 @@ OFFLINE=0
 PLAN_FILE=""
 ROOT=""
 ROOTMODE=0
+POLICY_TEST=""
 ROOT_ARG=""
 
 usage() {
   cat <<'EOF'
 사용법: php2shell-quickcheck.sh [옵션]
 
-PHP2Shell (CVE-2026-109618 / CVE-2026-109619) 노출 여부를 읽기 전용으로 점검합니다.
+PHP2Shell (CVE-2026-109618 / CVE-2026-109619) 점검 도구.
+서버 설정·패키지를 바꾸지 않습니다. 신뢰할 수 있는 PHP 바이너리만 `-n -v` 로 실행합니다(--no-exec 로 끌 수 있음).
+의심되는 호스트에서는 --no-exec 를 사용하세요.
 
   --json        기계가 읽는 JSON 을 stdout 으로 출력
   --no-exec     발견한 어떤 바이너리도 실행하지 않음 (패키지 DB / 파일 메타데이터 / 정적 문자열만 사용)
-  --exec        --root 와 함께 사용할 때만 의미 있음: 신뢰할 수 있는 트리의 바이너리를 `-n -v` 로 실행. --root 만 주면 실행하지 않음
+  --exec        신뢰하는 호스트에서만 사용: 신뢰 판정과 --root 기본 비실행을 무시하고 실행을 강제(--no-exec 가 우선, 삭제된 /proc 실행 파일은 항상 제외)
   --offline     조치 계획에 오프라인(폐쇄망) 패치 절차를 추가로 출력
   --plan-file FILE  이 서버에 맞춘 조치 계획을 사람이 검토하는 sh 스크립트로 저장 (도구는 절대 실행하지 않음, 기존 파일은 덮어쓰지 않음)
   --root DIR    DIR 을 파일시스템 루트로 간주하여 파일을 찾고, 실행 중 프로세스 점검은 건너뜀. 기본적으로 트리 안 바이너리를 실행하지 않음(--no-exec 와 동일)
@@ -55,6 +95,10 @@ while [ $# -gt 0 ]; do
     --json) JSON=1 ;;
     --no-exec) NOEXEC=1 ;;
     --exec) EXEC=1 ;;
+    --test-exec-policy)
+      # 테스트 전용: 실제 auto 신뢰 판정 검사(권한/신뢰 검사는 생략하지 않음).
+      if [ $# -lt 2 ] || [ "$2" != auto ]; then exit 2; fi
+      shift; POLICY_TEST=auto ;;
     --offline) OFFLINE=1 ;;
     --plan-file)
       if [ $# -lt 2 ]; then usage >&2; exit 2; fi
@@ -68,7 +112,7 @@ while [ $# -gt 0 ]; do
       if [ $# -lt 2 ]; then CLASSIFY_ARG=""; else CLASSIFY_ARG=$2; fi
       DO_CLASSIFY=1; break ;;
     -h|--help) usage; exit 0 ;;
-    *) printf '알 수 없는 옵션: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) printf '알 수 없는 옵션: %s\n' "$(clean_value "$1")" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
@@ -80,7 +124,7 @@ done
 verparse() {
   printf '%s\n' "$2" | awk -v mode="$1" '
   {
-    s = $0
+    s = substr($0,1,4096)
     if (!match(s, /[0-9]+\.[0-9]+\.[0-9]+/)) {
       if (mode == "class") print "unknown"; else print ""
       exit
@@ -146,13 +190,13 @@ if [ "${DO_CLASSIFY:-0}" = 1 ]; then
 fi
 
 if [ -n "$PLAN_FILE" ]; then
-  if [ -e "$PLAN_FILE" ]; then
-    printf '오류: --plan-file 대상이 이미 있습니다(덮어쓰지 않음): %s\n' "$PLAN_FILE" >&2
+  if [ -e "$PLAN_FILE" ] || [ -L "$PLAN_FILE" ]; then
+    printf '오류: --plan-file 대상이 이미 있습니다(덮어쓰지 않음): %s\n' "$(clean_value "$PLAN_FILE")" >&2
     exit 2
   fi
   pf_dir=$(dirname "$PLAN_FILE")
   if [ ! -d "$pf_dir" ] || [ ! -w "$pf_dir" ]; then
-    printf '오류: --plan-file 디렉터리에 쓸 수 없습니다: %s\n' "$pf_dir" >&2
+    printf '오류: --plan-file 디렉터리에 쓸 수 없습니다: %s\n' "$(clean_value "$pf_dir")" >&2
     exit 2
   fi
 fi
@@ -162,11 +206,18 @@ if [ "$ROOTMODE" = 1 ] && [ "$EXEC" = 0 ] && [ "$NOEXEC" = 0 ]; then
   NOEXEC=1
   ROOT_NOEXEC=1
 fi
+EXEC_MODE=auto
+if [ "$NOEXEC" = 1 ]; then EXEC_MODE=never
+elif [ "$EXEC" = 1 ]; then EXEC_MODE=all
+fi
+if [ "$POLICY_TEST" = auto ] && [ "$ROOT_NOEXEC" = 1 ]; then
+  EXEC_MODE=auto; NOEXEC=0; ROOT_NOEXEC=0
+fi
 
 # ---------------------------------------------------------------- 준비
 if [ "$ROOTMODE" = 1 ]; then
   if [ ! -d "$ROOT_ARG" ]; then
-    printf '오류: --root 디렉터리가 없습니다: %s\n' "$ROOT_ARG" >&2
+    printf '오류: --root 디렉터리가 없습니다: %s\n' "$(clean_value "$ROOT_ARG")" >&2
     exit 2
   fi
   ROOT=$(cd -P "$ROOT_ARG" && pwd -P)
@@ -180,33 +231,87 @@ TMPD=$(mktemp -d 2>/dev/null) || TMPD=$(mktemp -d -t php2shell 2>/dev/null) || {
 trap 'rm -rf "$TMPD"' EXIT
 trap 'exit 3' HUP INT TERM
 
-say() { printf '%s\n' "$*"; }
+say() { printf '%s\n' "$*" | clean_stream; }
 
 NOTES=""
 add_note() {
-  if [ -z "$NOTES" ]; then NOTES=$1; else NOTES=$NOTES$RS$1; fi
+  an_clean=$(clean_value "$1")
+  if [ -z "$NOTES" ]; then NOTES=$an_clean; else NOTES=$NOTES$RS$an_clean; fi
 }
 
-# 경로 해석(심볼릭 링크를 따라가며 ROOT 안에서만 해석)
+# 구성요소별 ROOT 경로 해석: 절대 링크 재루팅, ROOT 밖으로 가는 .. 거부.
 rp() {
-  rp_p=$1; rp_n=0
-  while [ -L "$rp_p" ] && [ "$rp_n" -lt 20 ]; do
-    rp_l=$(readlink "$rp_p") || break
-    case $rp_l in
-      /*) rp_p=$ROOT$rp_l ;;
-      *) rp_p=$(dirname "$rp_p")/$rp_l ;;
+  rr_todo=${1#"$ROOT"}; rr_todo=${rr_todo#/}; rr_done=""; rr_links=0
+  while [ -n "$rr_todo" ]; do
+    case $rr_todo in
+      */*) rr_part=${rr_todo%%/*}; rr_todo=${rr_todo#*/} ;;
+      *) rr_part=$rr_todo; rr_todo="" ;;
     esac
-    rp_n=$((rp_n + 1))
+    case $rr_part in
+      ''|.) continue ;;
+      ..)
+        [ -n "$rr_done" ] || return 1
+        rr_done=${rr_done%/*}
+        continue ;;
+    esac
+    rr_probe=$ROOT$rr_done/$rr_part
+    if [ -L "$rr_probe" ]; then
+      rr_links=$((rr_links + 1)); [ "$rr_links" -le 40 ] || return 1
+      rr_link=$(readlink "$rr_probe") || return 1
+      case $rr_link in /*) rr_done=""; rr_link=${rr_link#/} ;; esac
+      rr_todo=$rr_link${rr_todo:+/}$rr_todo
+    else
+      rr_done=$rr_done/$rr_part
+    fi
   done
-  rp_d=$(dirname "$rp_p"); rp_b=$(basename "$rp_p")
-  if rp_dd=$(cd -P "$rp_d" 2>/dev/null && pwd -P); then
-    case $rp_dd in
-      /) rp_p=/$rp_b ;;
-      *) rp_p=$rp_dd/$rp_b ;;
-    esac
-  fi
-  printf '%s' "$rp_p"
+  printf '%s' "${ROOT}${rr_done:-/}"
 }
+
+regular_capped() { # path, byte cap; FIFO/장치/과대 파일은 열지 않습니다.
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  rc_line=$(ls -ldn "$1" 2>/dev/null) || return 1
+  set -- "$2" $rc_line
+  case $6 in ''|*[!0-9]*) return 1 ;; esac
+  [ "$6" -le "$1" ]
+}
+root_file() {
+  rf_path=$(rp "$1") || return 1
+  [ ! -L "$rf_path" ] && regular_capped "$rf_path" "${2:-2097152}" || return 1
+  printf '%s' "$rf_path"
+}
+
+# BEGIN TRUST POLICY (하네스가 함수만 추출해 소유자/모드를 주입하여 검사)
+trust_metadata() { ls -ldn "$1" 2>/dev/null; }
+trusted_path() {
+  case $1 in /tmp/*|/var/tmp/*|/private/tmp/*|/private/var/tmp/*|/dev/shm/*|/run/user/*|/home/*|/Users/*) return 1 ;; esac
+  tp_path=$1
+  [ -f "$tp_path" ] && [ ! -L "$tp_path" ] || return 1
+  while :; do
+    tp_meta=$(trust_metadata "$tp_path") || return 1
+    set -- $tp_meta
+    [ "$3" = 0 ] || return 1
+    case $1 in ?????w????*|????????w*|*+) return 1 ;; esac
+    [ "$tp_path" = / ] && return 0
+    tp_path=${tp_path%/*}; [ -n "$tp_path" ] || tp_path=/
+    [ -d "$tp_path" ] || return 1
+  done
+}
+exec_allowed() { # 명시적 정책 auto|never|all, path, deleted, euid
+  EXEC_NOTE=""
+  case $2 in /proc/*/exe) EXEC_NOTE="실행 안 함: /proc 실행 파일은 직접 실행하지 않습니다."; return 1 ;; esac
+  if [ "$3" = 1 ]; then EXEC_NOTE="실행 안 함: 삭제/교체된 실행 파일입니다."; return 1; fi
+  case $1 in
+    never) return 1 ;;
+    all) return 0 ;;
+    auto)
+      [ "$4" != 0 ] && return 0
+      if trusted_path "$2"; then return 0; fi
+      EXEC_NOTE="실행 안 함: 신뢰할 수 없는 위치(쓰기 가능하거나 소유자가 root/관리자가 아님)"
+      return 1 ;;
+  esac
+  return 1
+}
+# END TRUST POLICY
 
 # timeout 지원 감지
 TO_MODE=none
@@ -219,10 +324,15 @@ fi
 # 시간 제한 실행: stdout+stderr 를 stdout 으로
 run_to() {
   case $TO_MODE in
-    modern) timeout 10 "$@" 2>&1 </dev/null; return 0 ;;
-    busybox) timeout -t 10 "$@" 2>&1 </dev/null; return 0 ;;
+    modern) timeout 10 "$ENV_BIN" -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin "$@" 2>&1 </dev/null | head -c 4096; return 0 ;;
+    busybox) timeout -t 10 "$ENV_BIN" -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin "$@" 2>&1 </dev/null | head -c 4096; return 0 ;;
   esac
-  "$@" >"$TMPD/rto" 2>&1 </dev/null &
+  # timeout 없는 macOS/BSD: 출력은 4096바이트로 자르고 실행 프로세스를 직접 감시합니다.
+  rm -f "$TMPD/exec.pipe"
+  /usr/bin/mkfifo "$TMPD/exec.pipe" 2>/dev/null || /bin/mkfifo "$TMPD/exec.pipe" 2>/dev/null || return 1
+  head -c 4096 < "$TMPD/exec.pipe" > "$TMPD/rto" &
+  rt_reader=$!
+  "$ENV_BIN" -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin "$@" > "$TMPD/exec.pipe" 2>&1 </dev/null &
   rt_pid=$!
   rt_n=0
   while kill -0 "$rt_pid" 2>/dev/null; do
@@ -230,9 +340,9 @@ run_to() {
     sleep 1
     rt_n=$((rt_n + 1))
   done
-  { wait "$rt_pid"; } 2>/dev/null
-  cat "$TMPD/rto" 2>/dev/null
-  return 0
+  { wait "$rt_pid"; wait "$rt_reader"; } 2>/dev/null
+  head -c 4096 "$TMPD/rto" 2>/dev/null
+  rm -f "$TMPD/exec.pipe"
 }
 
 mtime_of() {
@@ -246,11 +356,13 @@ mtime_of() {
 OS=$(uname -s 2>/dev/null || echo unknown)
 OS_ID=""; OS_LIKE=""; OS_PRETTY=""; OS_VER=""
 for osr in "$ROOT/etc/os-release" "$ROOT/usr/lib/os-release"; do
+  osr=$(root_file "$osr") || continue
   if [ -r "$osr" ]; then
-    OS_ID=$(sed -n 's/^ID=//p' "$osr" | head -1 | tr -d '"'"'")
-    OS_LIKE=$(sed -n 's/^ID_LIKE=//p' "$osr" | head -1 | tr -d '"'"'")
-    OS_PRETTY=$(sed -n 's/^PRETTY_NAME=//p' "$osr" | head -1 | tr -d '"'"'")
-    OS_VER=$(sed -n 's/^VERSION_ID=//p' "$osr" | head -1 | tr -d '"'"'")
+    os_text=$(head -c 2097152 "$osr" | awk '{print substr($0,1,4096)}')
+    OS_ID=$(printf '%s\n' "$os_text" | sed -n 's/^ID=//p' | head -1 | tr -d '"'"'")
+    OS_LIKE=$(printf '%s\n' "$os_text" | sed -n 's/^ID_LIKE=//p' | head -1 | tr -d '"'"'")
+    OS_PRETTY=$(printf '%s\n' "$os_text" | sed -n 's/^PRETTY_NAME=//p' | head -1 | tr -d '"'"'")
+    OS_VER=$(printf '%s\n' "$os_text" | sed -n 's/^VERSION_ID=//p' | head -1 | tr -d '"'"'")
     break
   fi
 done
@@ -320,10 +432,8 @@ elif [ -L /proc/self/exe ]; then
 elif command -v ps >/dev/null 2>&1; then
   PROC_MODE=ps
 fi
-IS_ROOT=1
-if [ "$ROOTMODE" = 0 ]; then
-  uid=$(id -u 2>/dev/null); [ "$uid" = 0 ] || IS_ROOT=0
-fi
+IS_ROOT=0
+[ "$EUID_NUM" = 0 ] && IS_ROOT=1
 
 # ---------------------------------------------------------------- 탐색
 CAND="$TMPD/cand.txt"
@@ -340,7 +450,11 @@ php_name_ok() {
 }
 
 add_cand() { # key disp acc kind cont del pid
-  printf '%s\n' "$1$US$2$US$3$US$4$US$5$US$6$US$7" >> "$CAND"
+  ac_key=$(clean_value "$1"); ac_disp=$(clean_value "$2"); ac_acc=$3; ac_kind=$4
+  if [ "$ac_key" != "$1" ] || [ "$ac_disp" != "$2" ] || [ "$(clean_value "$3")" != "$3" ]; then
+    ac_acc=""; ac_kind=unresolved
+  fi
+  printf '%s\n' "$ac_key$US$ac_disp$US$ac_acc$US$ac_kind$US$5$US$6$US$7" >> "$CAND"
 }
 
 disc_files() {
@@ -362,14 +476,21 @@ disc_files() {
       usr/local/opt/php*/bin/php* usr/local/opt/php*/sbin/php-fpm \
       Applications/MAMP/bin/php/php*/bin/php*
     do
-      [ -f "$f" ] || continue
+      [ -e "$f" ] || [ -L "$f" ] || continue
       php_name_ok "${f##*/}" || continue
+      if [ "$(clean_value "$f")" != "$f" ]; then
+        add_cand "unsafe:$f" "/$f" "" unresolved 0 0 ""
+        continue
+      fi
       printf '%s\n' "$f"
     done
   ) > "$TMPD/files.txt"
   while IFS= read -r df_f <&3; do
-    df_acc=$(rp "$ROOT/$df_f")
-    [ -f "$df_acc" ] || continue
+    df_acc=$(rp "$ROOT/$df_f") || {
+      say "경로 무시: --root 밖으로 나가거나 순환하는 심볼릭 링크: /$df_f" >&2
+      continue
+    }
+    [ -f "$df_acc" ] && [ ! -L "$df_acc" ] || continue
     df_disp=${df_acc#"$ROOT"}
     case ${df_disp##*/} in libphp*) df_kind=lib ;; *) df_kind=bin ;; esac
     add_cand "$df_acc" "$df_disp" "$df_acc" "$df_kind" 0 0 ""
@@ -530,20 +651,28 @@ mit_scan() {
       opt/cpanel/ea-php*/root/etc/php.ini opt/cpanel/ea-php*/root/etc/php.d/*.ini \
       opt/plesk/php/*/etc/php.ini opt/plesk/php/*/etc/php.d/*.ini opt/plesk/php/*/etc/php-fpm.d/*.conf
     do
-      [ -f "$f" ] && printf '%s\n' "$f"
+      if [ -e "$f" ] || [ -L "$f" ]; then
+        [ "$(clean_value "$f")" = "$f" ] && printf '%s\n' "$f"
+      fi
     done
   ) | sort -u > "$TMPD/mitfiles.txt"
   while IFS= read -r ms_f <&3; do
+    ms_acc=$(root_file "$ROOT/$ms_f") || continue
     ms_lab=$(mit_label "$ms_f")
-    grep -nE "$MIT_RE" "$ROOT/$ms_f" 2>/dev/null | awk -v lab="$ms_lab" -v f="/$ms_f" -v us="$US" '
+    head -c 2097152 "$ms_acc" | awk '{print substr($0,1,4096)}' | grep -nE "$MIT_RE" 2>/dev/null | clean_stream | awk -v lab="$ms_lab" -v f="/$ms_f" -v us="$US" '
       { i = index($0, ":"); n = substr($0, 1, i - 1); t = substr($0, i + 1); sub(/^[ \t]+/, "", t); print lab us f us n us substr(t, 1, 160) }' >> "$MITF"
   done 3< "$TMPD/mitfiles.txt"
   for ms_d in etc/apache2 etc/httpd usr/local/apache2/conf usr/local/etc/apache24 opt/homebrew/etc/httpd opt/lampp/etc; do
-    [ -d "$ROOT/$ms_d" ] || continue
-    grep -rnE "$MIT_RE_APACHE" "$ROOT/$ms_d" 2>/dev/null | awk -v root="$ROOT" -v us="$US" '
-      { i = index($0, ":"); f = substr($0, 1, i - 1); r = substr($0, i + 1); j = index(r, ":"); n = substr(r, 1, j - 1); t = substr(r, j + 1)
-        sub(/^[ \t]+/, "", t); if (length(root) > 0 && index(f, root) == 1) f = substr(f, length(root) + 1)
-        print "apache" us f us n us substr(t, 1, 160) }' >> "$MITF"
+    ms_dir=$(rp "$ROOT/$ms_d") || continue
+    [ -d "$ms_dir" ] || continue
+    find "$ms_dir" -type f -print 2>/dev/null > "$TMPD/apachefiles.txt"
+    while IFS= read -r ms_acc <&4; do
+      [ "$(clean_value "$ms_acc")" = "$ms_acc" ] || continue
+      ms_acc=$(root_file "$ms_acc") || continue
+      ms_disp=${ms_acc#"$ROOT"}
+      head -c 2097152 "$ms_acc" | awk '{print substr($0,1,4096)}' | grep -nE "$MIT_RE_APACHE" | clean_stream |
+        awk -v f="$ms_disp" -v us="$US" '{i=index($0,":"); print "apache" us f us substr($0,1,i-1) us substr($0,i+1,160)}' >> "$MITF"
+    done 4< "$TMPD/apachefiles.txt"
   done
 }
 mit_scan
@@ -552,6 +681,7 @@ mit_scan
 PKG_NAME=""; PKG_VER=""; PKG_TIME=""; PKG_PM=""
 
 apk_owner() {
+  ao_db=$(root_file "$ROOT/lib/apk/db/installed") || return 0
   awk -v want="$1" 'BEGIN { RS = ""; FS = "\n" }
     { p = ""; v = ""; d = ""; found = 0
       for (i = 1; i <= NF; i++) {
@@ -561,7 +691,7 @@ apk_owner() {
         else if (c == "F:") d = x
         else if (c == "R:") { full = (d == "") ? x : d "/" x; if (full == want) found = 1 }
       }
-      if (found) { print p " " v; exit } }' "$ROOT/lib/apk/db/installed" 2>/dev/null
+      if (found) { print p " " v; exit } }' "$ao_db" 2>/dev/null | head -c 4096
 }
 
 pkg_lookup() { # $1 = ROOT 기준 절대 경로
@@ -576,22 +706,30 @@ pkg_lookup() { # $1 = ROOT 기준 절대 경로
   esac
   case $PM in
     apt)
-      pl_list=$(grep -lFx -- "$pl_p" "$ROOT"/var/lib/dpkg/info/*.list 2>/dev/null | head -1)
-      if [ -z "$pl_list" ]; then
-        case $pl_p in /usr/*) pl_list=$(grep -lFx -- "${pl_p#/usr}" "$ROOT"/var/lib/dpkg/info/*.list 2>/dev/null | head -1) ;; esac
-      fi
+      pl_info=$(rp "$ROOT/var/lib/dpkg/info") || return 0
+      [ -d "$pl_info" ] || return 0
+      pl_list=""
+      for pl_f in "$pl_info"/*.list; do
+        pl_f=$(root_file "$pl_f") || continue
+        if head -c 2097152 "$pl_f" | grep -qFx -- "$pl_p"; then pl_list=$pl_f; break; fi
+        case $pl_p in /usr/*)
+          if head -c 2097152 "$pl_f" | grep -qFx -- "${pl_p#/usr}"; then pl_list=$pl_f; break; fi ;;
+        esac
+      done
       if [ -n "$pl_list" ]; then
         PKG_NAME=${pl_list##*/}; PKG_NAME=${PKG_NAME%.list}; PKG_NAME=${PKG_NAME%%:*}
-        PKG_VER=$(awk -v n="$PKG_NAME" '$1 == "Package:" { p = $2 } $1 == "Version:" && p == n { print $2; exit }' "$ROOT/var/lib/dpkg/status" 2>/dev/null)
+        safe_name "$PKG_NAME" || { PKG_NAME=""; return 0; }
+        pl_status=$(root_file "$ROOT/var/lib/dpkg/status") || return 0
+        PKG_VER=$(head -c 2097152 "$pl_status" | awk -v n="$PKG_NAME" '{ $0=substr($0,1,4096) } $1 == "Package:" { p = $2 } $1 == "Version:" && p == n { print $2; exit }')
         PKG_TIME=$(mtime_of "$pl_list")
         PKG_PM=apt
       fi ;;
     dnf|yum|microdnf|zypper)
       pl_fmt='%{NAME} %{VERSION}-%{RELEASE} %{INSTALLTIME}\n'
       if [ -n "$ROOT" ]; then
-        pl_out=$(rpm --root "$ROOT" -qf --qf "$pl_fmt" "$pl_p" 2>/dev/null </dev/null | head -1)
+        pl_out=$(rpm --root "$ROOT" -qf --qf "$pl_fmt" "$pl_p" 2>/dev/null </dev/null | head -c 4096 | head -1)
       else
-        pl_out=$(rpm -qf --qf "$pl_fmt" "$pl_p" 2>/dev/null </dev/null | head -1)
+        pl_out=$(rpm -qf --qf "$pl_fmt" "$pl_p" 2>/dev/null </dev/null | head -c 4096 | head -1)
       fi
       case $pl_out in file\ *|'') pl_out="" ;; esac
       if [ -n "$pl_out" ]; then
@@ -611,7 +749,7 @@ pkg_lookup() { # $1 = ROOT 기준 절대 경로
       fi ;;
     pkg)
       if [ -z "$ROOT" ] && command -v pkg >/dev/null 2>&1; then
-        pl_out=$(pkg which -q "$pl_p" 2>/dev/null </dev/null | head -1)
+        pl_out=$(pkg which -q "$pl_p" 2>/dev/null </dev/null | head -c 4096 | head -1)
         if [ -n "$pl_out" ]; then
           PKG_NAME=$(printf '%s' "$pl_out" | sed 's/-[^-]*$//')
           PKG_VER=$(printf '%s' "$pl_out" | sed 's/.*-//')
@@ -619,39 +757,70 @@ pkg_lookup() { # $1 = ROOT 기준 절대 경로
         fi
       fi ;;
   esac
+  if [ -n "$PKG_NAME" ] && ! safe_name "$PKG_NAME"; then PKG_NAME=""; PKG_VER=""; PKG_PM=""; fi
+  PKG_VER=$(clean_value "$PKG_VER")
   return 0
 }
 
 chg_cat() {
   case $1 in
-    *.gz) gzip -dc "$1" 2>/dev/null || zcat "$1" 2>/dev/null ;;
-    *) cat "$1" 2>/dev/null ;;
+    *.gz) gzip -dc "$1" 2>/dev/null | head -c 2097152 ;;
+    *) head -c 2097152 "$1" 2>/dev/null ;;
   esac
 }
 
+# 같은 유효한 변경 이력 항목 안에 두 CVE 가 모두 있어야 인정합니다.
+# 항목 밖의 문서 언급, 서로 다른 항목의 한 건씩 언급은 근거가 아닙니다.
+vendor_entries() {
+  awk -v format="$1" '
+    function flush() { if (a && b) { print lines; found=1; exit } }
+    {
+      s=substr($0,1,4096)
+      header=(format=="deb" ? s ~ /^[A-Za-z0-9][A-Za-z0-9+.-]* \([^)]*\) [^;]*;/ : s ~ /^\* [A-Za-z]/)
+      if (header) { flush(); active=1; a=0; b=0; lines=""; next }
+      if (format=="deb" && s ~ /^ -- /) { flush(); active=0 }
+      if (!active || (format=="deb" && s !~ /^[ \t]/)) next
+      lower=tolower(s)
+      if (lower ~ /not (yet )?fixed|unfixed|wontfix/) next
+      if (s ~ /CVE-2026-109618/) { a=1; lines=lines (lines=="" ? "" : "\n") s }
+      if (s ~ /CVE-2026-109619/) { b=1; if (s !~ /CVE-2026-109618/) lines=lines (lines=="" ? "" : "\n") s }
+    }
+    END { if (!found && a && b) print lines }
+  '
+}
+
 VENDOR=unknown
-vendor_check() { # PKG_NAME/PKG_PM 사용
+vendor_check() {
   VENDOR=unknown
+  safe_name "$PKG_NAME" || return 0
+  vc_lines=""
   case $PKG_PM in
     apt)
       for vc_f in changelog.Debian.gz changelog.Debian changelog.gz changelog; do
-        vc_p="$ROOT/usr/share/doc/$PKG_NAME/$vc_f"
-        if [ -r "$vc_p" ]; then
-          if chg_cat "$vc_p" | grep -q "$CVE1" && chg_cat "$vc_p" | grep -q "$CVE2"; then VENDOR=yes; else VENDOR=no; fi
-          return 0
-        fi
+        vc_p=$(root_file "$ROOT/usr/share/doc/$PKG_NAME/$vc_f") || continue
+        vc_lines=$(chg_cat "$vc_p" | vendor_entries deb)
+        VENDOR=no
+        [ -n "$vc_lines" ] && VENDOR=yes
+        break
       done ;;
     rpm)
       if [ -n "$ROOT" ]; then
-        rpm --root "$ROOT" -q --changelog "$PKG_NAME" > "$TMPD/chg.txt" 2>/dev/null </dev/null
+        rpm --root "$ROOT" -q --changelog "$PKG_NAME" 2>/dev/null </dev/null | head -c 2097152 > "$TMPD/chg.txt"
       else
-        rpm -q --changelog "$PKG_NAME" > "$TMPD/chg.txt" 2>/dev/null </dev/null
+        rpm -q --changelog "$PKG_NAME" 2>/dev/null </dev/null | head -c 2097152 > "$TMPD/chg.txt"
       fi
       if [ -s "$TMPD/chg.txt" ]; then
-        if grep -q "$CVE1" "$TMPD/chg.txt" && grep -q "$CVE2" "$TMPD/chg.txt"; then VENDOR=yes; else VENDOR=no; fi
+        vc_lines=$(vendor_entries rpm < "$TMPD/chg.txt")
+        VENDOR=no
+        [ -n "$vc_lines" ] && VENDOR=yes
       fi ;;
   esac
-  return 0
+  if [ "$VENDOR" = yes ]; then
+    printf '%s\n' "$vc_lines" > "$TMPD/vendor-lines.txt"
+    while IFS= read -r vc_line <&5; do
+      add_note "벤더 변경 이력 일치 줄: $vc_line"
+    done 5< "$TMPD/vendor-lines.txt"
+  fi
 }
 
 # ---------------------------------------------------------------- 버전 결정
@@ -660,7 +829,8 @@ ver_from_output() {
 }
 
 ver_static() {
-  LC_ALL=C grep -a -o 'X-Powered-By: PHP/[0-9][0-9A-Za-z.+~_-]*' "$1" 2>/dev/null </dev/null | head -1 | sed 's/^X-Powered-By: PHP\///'
+  regular_capped "$1" 125829120 || return 0
+  head -c 125829120 "$1" 2>/dev/null | LC_ALL=C grep -a -o 'X-Powered-By: PHP/[0-9][0-9A-Za-z.+~_-]*' | head -1 | head -c 4096 | sed 's/^X-Powered-By: PHP\///'
 }
 
 ver_from_path() {
@@ -730,6 +900,7 @@ BRANCH_LINES="$TMPD/branches.txt"
 : > "$BRANCH_LINES"
 
 list_add() { # 변수이름 값  (공백 구분 중복 제거)
+  safe_name "$2" || return 0
   eval "la_cur=\$$1"
   case " $la_cur " in *" $2 "*) return 0 ;; esac
   if [ -z "$la_cur" ]; then eval "$1=\$2"; else eval "$1=\"\$la_cur \$2\""; fi
@@ -737,6 +908,7 @@ list_add() { # 변수이름 값  (공백 구분 중복 제거)
 
 fpm_unit_for() { # disp -> unit 이름
   fu_d=$1; fu_b=${fu_d##*/}
+  safe_name "$fu_b" || return 1
   case $fu_d in
     */opt/remi/php*)
       fu_c=$(printf '%s' "$fu_d" | sed -n 's#.*/opt/remi/\(php[0-9]*\)/.*#\1#p')
@@ -786,7 +958,8 @@ evaluate() {
   if [ "$ev_pkgable" = 1 ]; then pkg_lookup "$ev_disp"; fi
 
   # 1) 실행(-n -v)
-  if [ "$NOEXEC" = 0 ] && [ "$ev_kind" = bin ] && [ "$ev_cont" = 0 ] && [ -x "$ev_acc" ] && [ -f "$ev_acc" ]; then
+  EXEC_NOTE=""
+  if [ "$ev_kind" = bin ] && [ "$ev_cont" = 0 ] && [ -x "$ev_acc" ] && regular_capped "$ev_acc" 125829120 && exec_allowed "$EXEC_MODE" "$ev_acc" "$ev_del" "$EUID_NUM"; then
     case $ev_bn in
       frankenphp*) ev_out=$(run_to "$ev_acc" version) ;;
       *) ev_out=$(run_to "$ev_acc" -n -v) ;;
@@ -795,6 +968,7 @@ evaluate() {
     VER=$(norm_version "$ev_raw")
     if [ -n "$VER" ]; then VSRC="exec"; else add_note "실행 결과에서 버전을 읽지 못했습니다(실행 실패 또는 시간 초과). 다른 방법으로 대체합니다."; fi
   fi
+  if [ -n "${EXEC_NOTE:-}" ]; then add_note "$EXEC_NOTE"; fi
   # 2) 패키지 DB
   if [ -z "$VER" ] && [ -n "$PKG_VER" ]; then
     VER=$(norm_version "$PKG_VER")
@@ -807,7 +981,7 @@ evaluate() {
     [ -n "$VER" ] && VSRC="static-scan"
   fi
   # 4) 경로명 추정
-  if [ -z "$VER" ]; then
+  if [ -z "$VER" ] && [ "$ev_kind" != unresolved ]; then
     ev_raw=$(ver_from_path "$ev_disp")
     VER=$(norm_version "$ev_raw")
     [ -n "$VER" ] && VSRC="path-name"
@@ -907,7 +1081,8 @@ evaluate() {
 
   if [ -n "$ev_pids" ]; then ev_pj=$ev_pids; else ev_pj=""; fi
   if [ -z "$VER" ]; then ev_verout=""; else ev_verout=$VER; fi
-  printf '%s\n' "$ev_disp$US$ev_verout$US$CLASS$US$VERDICT$US$SAPI$US$RUNNING$US$ev_pj$US$PKG_NAME$US$VENDOR$US$NEEDS$US$NOTES" >> "$RESULTS"
+  ev_pkgout=$(clean_value "$PKG_NAME")
+  printf '%s\n' "$ev_disp$US$ev_verout$US$CLASS$US$VERDICT$US$SAPI$US$RUNNING$US$ev_pj$US$ev_pkgout$US$VENDOR$US$NEEDS$US$NOTES" >> "$RESULTS"
 }
 
 while IFS=$US read -r ev_key ev_disp ev_acc ev_kind ev_cont ev_del ev_pids <&3; do
@@ -924,7 +1099,7 @@ elif [ "$ROOTMODE" = 0 ] && [ "$PROC_ENUM" = 0 ] && [ "$C_TOTAL" = 0 ]; then EXI
 fi
 
 # ---------------------------------------------------------------- 출력 도우미
-jesc() { sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\t' ' ' | tr -d '\001-\010\013-\037'; }
+jesc() { tr '\000-\037' '?' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 jstr() { printf '"%s"' "$(printf '%s' "$1" | jesc)"; }
 jnull_or_str() { if [ -z "$1" ]; then printf 'null'; else jstr "$1"; fi; }
 
@@ -1107,13 +1282,13 @@ plan_restart() {
     systemd)
       say "  systemctl list-units --type=service | grep -Ei 'php|fpm|httpd|apache|nginx|lsws|frankenphp'"
       case " $PLAN_SAPIS " in *" fpm "*|*" cgi "*)
-        for u in ${FPM_UNITS:-php-fpm}; do say "  sudo systemctl restart $u"; done ;;
+        for u in ${FPM_UNITS:-php-fpm}; do safe_unit "$u.service" && say "  sudo systemctl restart $u.service"; done ;;
       esac
       case " $PLAN_SAPIS " in *" apache "*)
-        case $PM in apt|zypper|apk) say "  sudo systemctl restart apache2" ;; *) say "  sudo systemctl restart httpd" ;; esac ;;
+        case $PM in apt|zypper|apk) say "  sudo systemctl restart apache2.service" ;; *) say "  sudo systemctl restart httpd.service" ;; esac ;;
       esac
       case " $PLAN_SAPIS " in *" litespeed "*) say "  sudo /usr/local/lsws/bin/lswsctrl restart" ;; esac
-      case " $PLAN_SAPIS " in *" frankenphp "*) say "  sudo systemctl restart frankenphp" ;; esac ;;
+      case " $PLAN_SAPIS " in *" frankenphp "*) say "  sudo systemctl restart frankenphp.service" ;; esac ;;
     openrc)
       case " $PLAN_SAPIS " in *" fpm "*|*" cgi "*)
         for u in ${FPM_UNITS:-php-fpm}; do say "  sudo rc-service $u restart"; done ;;
@@ -1182,7 +1357,7 @@ EOF
   say ""
   say "  이 호스트에서 정적으로 읽은 관련 설정(php -i 아님, 웹 SAPI 와 CLI 의 ini 는 다를 수 있음):"
   if [ -s "$MITF" ]; then
-    awk -F "$US" '{ print "    [" $1 "] " $2 ":" $3 ": " $4 }' "$MITF" | sort -u
+    awk -F "$US" '{ print "    [" $1 "] " $2 ":" $3 ": " $4 }' "$MITF" | sort -u | clean_stream
   else
     say "    관련 키를 명시한 파일을 찾지 못했습니다(PHP 기본값 적용: upload_progress 사용 가능, memory_limit 128M, auto_start 0, post_max_size 8M)."
     say "    표준 경로 밖의 설정 파일이 있을 수 있습니다."
@@ -1327,6 +1502,8 @@ write_plan_file() {
   case $PM in apt|zypper|apk) wp_web=apache2 ;; *) wp_web=httpd ;; esac
   (
     umask 077
+    set -C
+    [ ! -L "$wp_f" ] && [ ! -e "$wp_f" ] || exit 2
     {
       printf '%s\n' '#!/bin/sh'
       cat <<'PF_HEAD'
@@ -1372,6 +1549,7 @@ if ! confirm '증거 보존을 마쳤거나 침해 의심이 없음을 확인했
   echo '중단합니다. 증거를 확보한 뒤 다시 실행하세요.'
   exit 1
 fi
+umask 077
 EVID=${PHP2SHELL_EVIDENCE_DIR:-./php2shell-evidence}
 if confirm "프로세스/네트워크 상태를 $EVID 에 읽기 전용으로 수집할까요?"; then
   mkdir -p "$EVID" || exit 1
@@ -1455,11 +1633,11 @@ PF_GUARD
       case $INIT in
         systemd)
           case " $PLAN_SAPIS " in *" fpm "*|*" cgi "*)
-            for u in $wp_units; do printf '%s\n' "  \$SUDO systemctl restart $u"; wp_any=1; done ;;
+            for u in $wp_units; do safe_unit "$u.service" || continue; printf '%s\n' "  \$SUDO systemctl restart $u.service"; wp_any=1; done ;;
           esac
-          case " $PLAN_SAPIS " in *" apache "*) printf '%s\n' "  \$SUDO systemctl restart $wp_web"; wp_any=1 ;; esac
+          case " $PLAN_SAPIS " in *" apache "*) printf '%s\n' "  \$SUDO systemctl restart $wp_web.service"; wp_any=1 ;; esac
           case " $PLAN_SAPIS " in *" litespeed "*) printf '%s\n' '  $SUDO /usr/local/lsws/bin/lswsctrl restart'; wp_any=1 ;; esac
-          case " $PLAN_SAPIS " in *" frankenphp "*) printf '%s\n' '  $SUDO systemctl restart frankenphp'; wp_any=1 ;; esac ;;
+          case " $PLAN_SAPIS " in *" frankenphp "*) printf '%s\n' '  $SUDO systemctl restart frankenphp.service'; wp_any=1 ;; esac ;;
         openrc)
           case " $PLAN_SAPIS " in *" fpm "*|*" cgi "*)
             for u in $wp_units; do printf '%s\n' "  \$SUDO rc-service $u restart"; wp_any=1; done ;;
@@ -1504,21 +1682,22 @@ PF_VERIFY
       plan_evidence | sed 's/^/# /'
       printf '%s\n' "echo '조치 계획 스크립트가 끝났습니다. 결과를 직접 확인하세요.'"
     } > "$wp_f"
-  )
+  ) || return 2
   chmod 700 "$wp_f" 2>/dev/null
 }
 
 if [ -n "$PLAN_FILE" ]; then
   if write_plan_file "$PLAN_FILE" && [ -s "$PLAN_FILE" ]; then
     if [ "$JSON" = 1 ]; then
-      printf '조치 계획 파일 저장: %s\n' "$PLAN_FILE" >&2
+      printf '조치 계획 파일 저장: %s\n' "$(clean_value "$PLAN_FILE")" >&2
     else
       say "조치 계획 파일 저장: $PLAN_FILE"
       say "  (사람이 검토하는 파일입니다. 도구는 실행하지 않았습니다. 검토 후 PHP2SHELL_I_REVIEWED=yes sh $PLAN_FILE 로 직접 실행하세요.)"
       say ""
     fi
   else
-    printf '오류: 조치 계획 파일을 쓰지 못했습니다: %s\n' "$PLAN_FILE" >&2
+    printf '오류: 조치 계획 파일을 쓰지 못했습니다: %s\n' "$(clean_value "$PLAN_FILE")" >&2
+    exit 2
   fi
 fi
 

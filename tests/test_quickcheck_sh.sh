@@ -298,6 +298,226 @@ PF4="$TMP/plan-noexec.sh"
 sh "$QC" --root "$R" --no-exec --plan-file "$PF4" >/dev/null 2>&1
 if sh -n "$PF4" 2>/dev/null; then ok; else bad 'plan-file(--no-exec) sh -n'; fi
 
+# ---------------------------------------------------------------- (d) 보안 회귀
+# H1: auto 정책은 root 일 때 /tmp 트리를 신뢰하지 않고, --exec 만 강제 실행.
+R=$(mkroot trustauto)
+rm -f "$MARK"
+mkfake "$R/usr/bin/php8.4" 'PHP 8.4.26 (cli)' "$MARK"
+out=$(run_json --root "$R" --test-exec-policy auto); rc=$?
+if [ "$(id -u)" = 0 ]; then
+  if [ -e "$MARK" ]; then bad 'auto privileged 에서 /tmp 의 바이너리를 실행함'; else ok; fi
+  contains 'auto privileged 거부 설명' "$out" '실행 안 함: 신뢰할 수 없는 위치'
+  equals 'auto privileged unknown' 3 "$rc"
+else
+  if [ -e "$MARK" ]; then ok; else bad 'auto 비특권 실행은 허용되어야 함'; fi
+fi
+out=$(run_json --root "$R" --exec)
+if [ -e "$MARK" ]; then ok; else bad '--exec 강제 실행되지 않음'; fi
+
+# 신뢰 함수의 metadata seam: 실제 파일은 필요하지만 UID/모드는 주입 가능.
+awk '/^# BEGIN TRUST POLICY/ {p=1;next} /^# END TRUST POLICY/ {p=0} p' "$QC" > "$TMP/trust-functions.sh"
+TRUST_FILE=/bin/ls
+[ -f /bin/busybox ] && TRUST_FILE=/bin/busybox
+if (
+  . "$TMP/trust-functions.sh"
+  trust_metadata() { printf '%s 1 %s 0 1 Jan 1 00:00 target\n' "${TEST_MODE:--rwxr-xr-x}" "${TEST_UID:-0}"; }
+  TEST_UID=0; TEST_MODE=-rwxr-xr-x
+  trusted_path "$TRUST_FILE" || exit 1
+  TEST_UID=1000; trusted_path "$TRUST_FILE" && exit 2
+  TEST_UID=0; TEST_MODE=-rwxrwxr-x; trusted_path "$TRUST_FILE" && exit 3
+  TEST_MODE=-rwxr-xrwx; trusted_path "$TRUST_FILE" && exit 4
+  TEST_MODE=-rwxr-xr-x
+  exec_allowed auto /tmp/php 0 1000 || exit 5
+  exec_allowed never "$TRUST_FILE" 0 1000 && exit 6
+  exec_allowed all "$TRUST_FILE" 1 0 && exit 7
+  exec_allowed all /proc/123/exe 0 0 && exit 8
+  trust_metadata() {
+    if [ "$1" = / ]; then echo 'drwxrwxrwx 1 0 0 1 Jan 1 00:00 root'
+    else echo '-rwxr-xr-x 1 0 0 1 Jan 1 00:00 file'; fi
+  }
+  trusted_path "$TRUST_FILE" && exit 9
+  exit 0
+); then ok; else bad "신뢰 predicate metadata/policy 회귀: $?"; fi
+
+# env -i: 비밀 환경변수/PATH 를 자식에게 전달하지 않음.
+R=$(mkroot envclean)
+cat > "$R/usr/bin/php8.4" <<'ENVFIX'
+#!/bin/sh
+if [ -n "${PHP2SHELL_SECRET_TEST:-}" ] || [ "$PATH" != /usr/sbin:/usr/bin:/sbin:/bin ] || [ "$LC_ALL" != C ]; then
+  echo 'PHP 8.4.26 (cli)'
+else
+  echo 'PHP 8.4.27 (cli)'
+fi
+ENVFIX
+chmod 755 "$R/usr/bin/php8.4"
+out=$(PHP2SHELL_SECRET_TEST=leak run_json --root "$R" --exec)
+contains 'env -i 비밀/PATH 제거' "$out" '"version":"8.4.27","class":"fixed"'
+# 상속 PATH 에 가짜 시스템 도구가 있어도 사용하지 않음.
+mkdir -p "$TMP/badtools"
+mkfake "$TMP/badtools/uname" 'HIJACKED'
+out=$(PATH="$TMP/badtools:$PATH" /bin/sh "$QC" --root "$R" --exec --json 2>/dev/null)
+not_contains '절대 경로 도구: PATH 탈취 방지' "$out" 'HIJACKED'
+
+# 자식 출력 4096바이트 이후의 버전 문자열은 판정에 사용하지 않음.
+R=$(mkroot hugeoutput)
+cat > "$R/usr/bin/php8.4" <<'BIGFIX'
+#!/bin/sh
+awk 'BEGIN {for(i=0;i<5000;i++) printf "A"; print ""; print "PHP 8.4.27 (cli)"}'
+BIGFIX
+chmod 755 "$R/usr/bin/php8.4"
+out=$(run_json --root "$R" --exec); rc=$?
+equals '실행 출력 4096바이트 상한' 3 "$rc"
+contains '4096 이후 버전 미인정' "$out" '"version":null,"class":"unknown"'
+
+# M1: 수정된 설치가 있어도 unknown 한 건이면 종료 코드 3.
+R=$(mkroot mixedunknown)
+mkfake "$R/usr/bin/php8.4" 'PHP 8.4.27 (cli)'
+mkfake "$R/usr/bin/php8.3" 'garbage'
+out=$(run_json --root "$R" --exec); rc=$?
+equals 'fixed + unknown 은 exit 3' 3 "$rc"
+contains 'mixed fixed' "$out" '"fixed":1'
+contains 'mixed unknown' "$out" '"unknown":1'
+
+# M5: 상대 링크 탈출/디렉터리 링크 탈출 거부, 절대 링크는 트리 안으로 재루팅.
+R=$(mkroot containment)
+mkdir -p "$TMP/outside"
+rm -f "$MARK"
+mkfake "$TMP/outside/php" 'PHP 8.4.27 (cli)' "$MARK"
+ln -s ../../../outside/php "$R/usr/bin/php8.4"
+out=$(sh "$QC" --root "$R" --exec --json 2>"$TMP/escape.err")
+if [ -e "$MARK" ]; then bad '상대 링크로 ROOT 밖 바이너리 실행'; else ok; fi
+contains '상대 링크 밖 파일은 미탐색' "$out" '"installations":[]'
+contains '탈출 경로 무시 안내' "$(cat "$TMP/escape.err")" '경로 무시'
+rm "$R/usr/bin/php8.4"
+ln -s /usr/sbin/php-fpm8.4 "$R/usr/bin/php8.4"
+mkfake "$R/usr/sbin/php-fpm8.4" 'PHP 8.4.26 (fpm-fcgi)'
+out=$(run_json --root "$R" --exec)
+contains '절대 링크 재루팅' "$out" '"path":"/usr/sbin/php-fpm8.4","version":"8.4.26"'
+n=$(printf '%s' "$out" | grep -o '"path":' | wc -l | tr -d ' ')
+equals '절대 링크 재루팅 중복 제거' 1 "$n"
+R=$(mkroot dircontainment)
+rm -rf "$R/usr/bin"
+ln -s ../../outside "$R/usr/bin"
+out=$(run_json --root "$R" --exec)
+if [ -e "$MARK" ]; then bad '디렉터리 링크로 ROOT 밖 실행'; else ok; fi
+contains '디렉터리 링크 탈출 거부' "$out" '"installations":[]'
+# FIFO 는 열지 않음. 대형 regular file 문자열도 스캔하지 않음.
+R=$(mkroot nonregular)
+mkfifo "$R/usr/bin/php8.4"
+out=$(run_json --root "$R")
+contains 'FIFO 무시(블로킹 없음)' "$out" '"installations":[]'
+rm "$R/usr/bin/php8.4"
+printf '# X-Powered-By: PHP/8.4.27\n' > "$R/usr/bin/php8.4"
+dd if=/dev/zero of="$R/usr/bin/php8.4" bs=1 count=1 seek=125829121 2>/dev/null
+out=$(run_json --root "$R"); rc=$?
+equals '120MB 초과 바이너리 미판정' 3 "$rc"
+contains '대형 파일 버전 미인정' "$out" '"version":null,"class":"unknown"'
+# config 와 changelog 의 ROOT 밖 링크도 읽지 않음.
+R=$(mkroot configcontainment)
+mkfake "$R/usr/sbin/php-fpm8.2" 'PHP 8.2.34 (fpm-fcgi)'
+mkdeb "$R" x one
+printf 'session.auto_start = 999\n' > "$TMP/outside/php.ini"
+ln -s ../../outside/php.ini "$R/etc/php.ini"
+txt=$(sh "$QC" --root "$R" 2>/dev/null)
+not_contains '설정 파일 탈출 미읽기' "$txt" 'session.auto_start = 999'
+rm -f "$R/usr/share/doc/php8.2-fpm/changelog.Debian" "$R/usr/share/doc/php8.2-fpm/changelog.Debian.gz"
+printf 'php8.2 (8.2.34) stable; urgency=high\n  * Fix CVE-2026-109618 and CVE-2026-109619\n' > "$TMP/outside/changelog"
+ln -s ../../../../../../outside/changelog "$R/usr/share/doc/php8.2-fpm/changelog.Debian"
+out=$(run_json --root "$R")
+not_contains '변경 이력 탈출 미읽기' "$out" '"verdict":"vendor_patched"'
+
+# M6: 변경 이력 항목 경계 + 일치 줄 notes.
+R=$(mkroot debentry)
+mkfake "$R/usr/sbin/php-fpm8.2" 'PHP 8.2.34 (fpm-fcgi)'
+mkdeb "$R" x both
+out=$(run_json --root "$R")
+contains '벤더 근거 일치 줄 노출' "$out" '벤더 변경 이력 일치 줄:'
+contains '벤더 근거 실제 줄' "$out" '* Fix CVE-2026-109618'
+rm -f "$R/usr/share/doc/php8.2-fpm/changelog.Debian.gz"
+printf 'Bare documentation: CVE-2026-109618 CVE-2026-109619\n' > "$R/usr/share/doc/php8.2-fpm/changelog.Debian"
+out=$(run_json --root "$R")
+contains '항목 밖 두 CVE 언급 불인정' "$out" '"verdict":"vulnerable"'
+cat > "$R/usr/share/doc/php8.2-fpm/changelog.Debian" <<'SPLITDEB'
+php8.2 (8.2.34-1) stable; urgency=high
+  * Fix CVE-2026-109618
+ -- Maintainer  Fri, 23 Oct 2026
+php8.2 (8.2.33-1) stable; urgency=high
+  * Fix CVE-2026-109619
+ -- Maintainer  Thu, 22 Oct 2026
+SPLITDEB
+out=$(run_json --root "$R")
+contains '서로 다른 항목의 CVE 불인정' "$out" '"verdict":"vulnerable"'
+# RPM parser 는 실제 함수 추출로 rpm 유무와 관계없이 양쪽 형식의 경계를 검증.
+awk '/^vendor_entries\(\)/ {p=1} p {print} p && /^}/ {exit}' "$QC" > "$TMP/vendor-parser.sh"
+rpm_ok=$(
+  . "$TMP/vendor-parser.sh"
+  printf '* Fri Oct 23 2026 Maintainer - 8.2.34\n- Fix CVE-2026-109618\n- Fix CVE-2026-109619\n' | vendor_entries rpm
+)
+contains 'RPM 유효 항목 인식' "$rpm_ok" 'CVE-2026-109619'
+rpm_bad=$(
+  . "$TMP/vendor-parser.sh"
+  printf 'CVE-2026-109618 CVE-2026-109619\n* Fri Oct 23 2026 Maintainer - 8.2.34\n- Fix CVE-2026-109618\n* Thu Oct 22 2026 Maintainer - 8.2.33\n- Fix CVE-2026-109619\n' | vendor_entries rpm
+)
+equals 'RPM 항목 밖/분리 항목 불인정' "" "$rpm_bad"
+# gzip bomb: 2MB 뒤 두 CVE 가 있어도 버퍼를 넘겨 읽지 않음.
+if command -v gzip >/dev/null 2>&1; then
+  {
+    printf 'php8.2 (8.2.34-1) stable; urgency=high\n'
+    awk 'BEGIN {for(i=0;i<40000;i++) print "  padding padding padding padding padding padding padding padding"}'
+    printf '  * Fix CVE-2026-109618 and CVE-2026-109619\n'
+  } | gzip -c > "$R/usr/share/doc/php8.2-fpm/changelog.Debian.gz"
+  out=$(run_json --root "$R")
+  contains 'gzip 출력 2MB 상한' "$out" '"verdict":"vulnerable"'
+fi
+
+# M7/LOW: 터미널 제어문자/IFS 구분자는 데이터로만, 유닛명에 세미콜론은 제안 안 함.
+R=$(mkroot hostile)
+mkdeb "$R" x one
+mkdir -p "$R/run/systemd/system"
+ESC=$(printf '\033'); SEP=$(printf '\037'); REC=$(printf '\036'); NL='
+'
+for hostile in "php-fpm8.4;UNSAFE" "php8.4${ESC}[2K" "php8.4${SEP}fixed" "php8.4${REC}fixed" "php8.4${NL}fixed"; do
+  mkfake "$R/usr/sbin/$hostile" 'PHP 8.4.26 (fpm-fcgi)'
+done
+txt=$(sh "$QC" --root "$R" --exec 2>/dev/null)
+if printf '%s' "$txt" | grep -q "$ESC"; then bad '터미널 ESC 가 그대로 출력됨'; else ok; fi
+if printf '%s' "$txt" | grep -q "$SEP"; then bad 'IFS 구분자 US 가 출력됨'; else ok; fi
+if printf '%s' "$txt" | grep -q "$REC"; then bad 'IFS 구분자 RS 가 출력됨'; else ok; fi
+not_contains '악성 유닛명 제안 거부' "$txt" 'systemctl restart php-fpm8.4;UNSAFE'
+not_contains '경로로 fixed 행 위조 불가' "$txt" '[수정됨]'
+HPLAN="$TMP/hostile-plan.sh"
+sh "$QC" --root "$R" --exec --plan-file "$HPLAN" >/dev/null 2>&1
+if sh -n "$HPLAN"; then ok; else bad 'hostile plan 문법'; fi
+not_contains 'plan 악성 유닛 거부' "$(cat "$HPLAN")" 'restart php-fpm8.4;UNSAFE'
+# Unicode NEL / line separator 도 한국어를 손상시키지 않고 제거.
+R=$(mkroot unicodehost)
+mkdir -p "$R/etc"
+printf 'ID=debian\nPRETTY_NAME="한글\302\205X\342\200\250Y\342\200\251Z"\n' > "$R/etc/os-release"
+txt=$(sh "$QC" --root "$R" 2>/dev/null)
+contains 'Unicode 제어문자 정화, 한글 보존' "$txt" '한글?X?Y?Z'
+
+# M9/M10: dangling symlink/기존 파일 거부, 0700, 첫 실행문 가드, 증거 umask.
+R=$(mkroot safewrite)
+DANGLE="$TMP/dangling-plan.sh"
+ln -s "$TMP/must-not-exist" "$DANGLE"
+sh "$QC" --root "$R" --plan-file "$DANGLE" >/dev/null 2>&1
+equals 'dangling plan 링크 거부 exit2' 2 "$?"
+if [ -e "$TMP/must-not-exist" ]; then bad 'dangling plan 링크를 따라 파일 생성'; else ok; fi
+SECPLAN="$TMP/private-plan.sh"
+sh "$QC" --root "$R" --plan-file "$SECPLAN" >/dev/null 2>&1
+mode=$(ls -ld "$SECPLAN"); mode=${mode%% *}; mode=${mode%@}
+equals 'plan 권한 0700' '-rwx------' "$mode"
+guard=$(awk '/^[[:space:]]*#/ || /^[[:space:]]*$/ {next} {print;exit}' "$SECPLAN")
+contains 'plan 첫 실행문은 review 가드' "$guard" 'PHP2SHELL_I_REVIEWED'
+maskline=$(grep -n '^umask 077$' "$SECPLAN" | head -1 | cut -d: -f1)
+mkdirline=$(grep -n 'mkdir -p "$EVID"' "$SECPLAN" | head -1 | cut -d: -f1)
+if [ -n "$maskline" ] && [ -n "$mkdirline" ] && [ "$maskline" -lt "$mkdirline" ]; then ok; else bad '증거 mkdir 전에 umask 077 없음'; fi
+# 기존 파일을 교체하지 않고 그대로 두는지 내용까지 확인.
+printf 'keep me\n' > "$TMP/existing-plan.sh"
+sh "$QC" --root "$R" --plan-file "$TMP/existing-plan.sh" >/dev/null 2>&1
+equals '기존 파일 거부 exit2' 2 "$?"
+equals '기존 파일 내용 보존' 'keep me' "$(cat "$TMP/existing-plan.sh")"
+
 # ---------------------------------------------------------------- 결과
 printf '통과 %s / 실패 %s\n' "$PASS" "$FAIL"
 if [ "$FAIL" -ne 0 ]; then

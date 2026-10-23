@@ -1,12 +1,14 @@
 ﻿<#
 .SYNOPSIS
-  PHP2Shell (CVE-2026-109618 / CVE-2026-109619) Windows 점검 스크립트 (방어 전용, 읽기 전용).
+  PHP2Shell (CVE-2026-109618 / CVE-2026-109619) Windows 점검 스크립트 (방어 전용).
 
 .DESCRIPTION
   Python 없이 Windows PowerShell 5.1 / PowerShell 7+ 에서 실행됩니다. 외부 모듈과 관리자 권한이 필요 없습니다.
   PHP 설치(php.exe, php-cgi.exe, php-win.exe, php*apache*.dll, php*ts.dll)를 실행 중 프로세스, IIS FastCGI 설정,
   Apache 서비스/httpd.conf, 일반적인 설치 경로에서 찾아 버전을 분류하고 조치 계획을 출력합니다.
-  어떤 것도 수정하지 않으며 네트워크 호출도 하지 않습니다. 이 스크립트는 취약점을 재현하거나 시험하는 코드를 포함하지 않습니다.
+  서버 설정·패키지를 바꾸지 않습니다. 신뢰할 수 있는 PHP 바이너리만 -n -v 로 실행합니다(-NoExec 로 끌 수 있음).
+  의심되는 호스트에서는 -NoExec 를 쓰세요. -Exec 는 신뢰하는 호스트에서만 사용하세요(신뢰 검사를 우회하여 실행).
+  네트워크 호출과 취약점 재현은 하지 않습니다. -PlanFile 을 지정한 경우에만 새 계획 파일을 만듭니다(기존 파일 거부).
 
   종료 코드: 0 = 조치 필요 없음, 1 = 취약/EOL 또는 수정되었으나 이전 코드가 실행 중, 3 = 판단 불가.
 
@@ -80,6 +82,7 @@ function ConvertFrom-PhpVersion {
     # 문자열에서 처음 나오는 X.Y.Z 를 취하고(4번째 숫자 성분은 무시), 바로 뒤의 alpha|beta|RC|dev 태그를 읽습니다.
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    if ($Text.Length -gt 4096) { $Text = $Text.Substring(0, 4096) }
     $m = [regex]::Match($Text, '(?<!\d)(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:\.\d+)?(?:([-.]?)(alpha|beta|RC|dev)(?![A-Za-z])(\d*))?', 'IgnoreCase')
     if (-not $m.Success) { return $null }
     $rank = 4
@@ -91,7 +94,7 @@ function ConvertFrom-PhpVersion {
         elseif ($tag -eq 'alpha') { $rank = 1 }
         elseif ($tag -eq 'beta') { $rank = 2 }
         else { $rank = 3 }
-        if ($m.Groups[6].Value.Length -gt 0) { $num = [long]$m.Groups[6].Value }
+        if ($m.Groups[6].Value.Length -gt 0 -and -not [long]::TryParse($m.Groups[6].Value, [ref]$num)) { return $null }
         $tagText = $m.Groups[4].Value + $m.Groups[5].Value + $m.Groups[6].Value
     }
     $patch = [long]$m.Groups[3].Value
@@ -177,6 +180,105 @@ function Add-Unique {
     $List.Add($Value)
 }
 
+function ConvertTo-SafeText {
+    param([string]$Text)
+    return [regex]::Replace($Text, '[\x00-\x1f\x7f-\x9f\u2028\u2029]', '?')
+}
+
+function Test-RootPath {
+    # -Root 안의 각 구성요소를 검사한다. 바깥 심볼릭 링크/정션 및 해석할 수 없는 링크는 열지 않는다.
+    param([string]$Path, [int]$Depth = 0)
+    if (-not $Path -or $Depth -gt 16) { return $false }
+    if (-not $script:RootDir) { return $true }
+    try {
+        $rootPath = [IO.Path]::GetFullPath($script:RootDir)
+        if ($rootPath -ne [IO.Path]::GetPathRoot($rootPath)) { $rootPath = $rootPath.TrimEnd([IO.Path]::DirectorySeparatorChar) }
+        $full = [IO.Path]::GetFullPath($Path)
+        $comparison = [StringComparison]::Ordinal
+        if ($script:OnWindows) { $comparison = [StringComparison]::OrdinalIgnoreCase }
+        $prefix = $rootPath.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if (-not $full.Equals($rootPath, $comparison) -and -not $full.StartsWith($prefix, $comparison)) {
+            Add-Warn ('-Root 밖 경로 무시: ' + (ConvertTo-SafeText $Path))
+            return $false
+        }
+        $relative = $full.Substring($rootPath.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
+        $current = $rootPath
+        foreach ($part in ($relative -split '[\\/]')) {
+            if (-not $part) { continue }
+            $current = [IO.Path]::Combine($current, $part)
+            $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                $target = ''
+                if ($item.PSObject.Methods['ResolveLinkTarget']) {
+                    $resolved = $item.ResolveLinkTarget($true)
+                    if ($null -ne $resolved) { $target = $resolved.FullName }
+                } elseif ($item.PSObject.Properties['Target']) {
+                    $targets = @($item.Target)
+                    if ($targets.Count -eq 1) {
+                        $target = [string]$targets[0]
+                        if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -Parent $current) $target }
+                        $target = [IO.Path]::GetFullPath($target)
+                    }
+                }
+                # PS 5.1의 Target은 중첩 링크를 완전히 해석하지 못하므로 그 구성요소도 재귀 검사한다.
+                if (-not $target -or (-not $target.Equals($rootPath, $comparison) -and -not $target.StartsWith($prefix, $comparison))) {
+                    Add-Warn ('-Root 밖 또는 해석 불가능한 링크/정션 무시: ' + (ConvertTo-SafeText $current))
+                    return $false
+                }
+                if (-not $item.PSObject.Methods['ResolveLinkTarget']) {
+                    # 오래된 .NET에서는 링크를 보수적으로 건너뛰어 중첩 링크 우회를 막는다.
+                    Add-Warn ('-Root 링크/정션 무시(완전한 대상 해석 불가): ' + (ConvertTo-SafeText $current))
+                    return $false
+                }
+                if (-not (Test-RootPath $target ($Depth + 1))) { return $false }
+                $current = $target
+            }
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Test-RegularFile {
+    param([string]$Path, [long]$MaxBytes = 125829120)
+    if (-not (Test-RootPath $Path)) { return $false }
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (-not ($item -is [IO.FileInfo]) -or ($item.Attributes -band [IO.FileAttributes]::Device)) { return $false }
+        if (-not $script:OnWindows -and $item.PSObject.Properties['UnixStat']) {
+            if (([long]$item.UnixStat.Mode -band 61440) -ne 32768) { return $false }
+        }
+        if ($item.Length -gt $MaxBytes) {
+            Add-Warn ('파일 읽기 상한 초과로 무시: ' + (ConvertTo-SafeText $Path))
+            return $false
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Read-SafeText {
+    # 텍스트 <= 2 MiB, 정규 파일만. UTF-8 BOM/UTF-16 BOM도 StreamReader가 처리한다.
+    param([string]$Path)
+    if (-not (Test-RegularFile $Path 2097152)) { return $null }
+    $reader = $null
+    try {
+        $reader = New-Object IO.StreamReader($Path, [Text.Encoding]::UTF8, $true)
+        $buffer = New-Object 'char[]' 2097153
+        $count = $reader.ReadBlock($buffer, 0, $buffer.Length)
+        if ($count -gt 2097152) { return $null }
+        return (New-Object string($buffer, 0, $count))
+    } catch { return $null } finally { if ($null -ne $reader) { $reader.Dispose() } }
+}
+
+function Read-SafeLines {
+    param([string]$Path)
+    $text = Read-SafeText $Path
+    if ($null -eq $text) { return @() }
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line.Length -gt 4096) { $line = $line.Substring(0, 4096) }
+        $line
+    }
+}
+
 function Resolve-FsPath {
     # Windows 경로(문자열)를 실제 파일시스템 경로로 바꿉니다. -Root 가 있으면 드라이브 문자를 떼고 Root 아래로 매핑합니다.
     param([string]$Path)
@@ -186,6 +288,10 @@ function Resolve-FsPath {
         $p = $p -replace '^%[^%]+%', ''
         $p = $p -replace '^[A-Za-z]:', ''
         $p = $p -replace '\\', '/'
+        if (@($p.Split('/') | Where-Object { $_ -eq '..' }).Count -gt 0) {
+            Add-Warn ('-Root 설정 경로의 .. 거부: ' + (ConvertTo-SafeText $Path))
+            return ''
+        }
         $p = $p.TrimStart('/')
         return (Join-Path $script:RootDir $p)
     }
@@ -246,6 +352,7 @@ function Add-Binary {
         Add-Warn ('{0} 에서 참조된 파일을 찾을 수 없습니다: {1}' -f $Source, $Path)
         return $null
     }
+    if (-not (Test-RegularFile $full)) { return $null }
     $dir = Split-Path -Parent $full
     $inst = Get-Inst $dir
     Add-Unique $inst.Binaries $full
@@ -256,6 +363,7 @@ function Add-Binary {
 
 function Add-DirScan {
     param([string]$Dir, [string]$Source)
+    if (-not (Test-RootPath $Dir)) { return }
     $files = @()
     try { $files = @([System.IO.Directory]::GetFiles($Dir)) } catch { return }
     foreach ($f in $files) {
@@ -272,8 +380,10 @@ function Expand-Glob {
     try {
         $b = [System.Management.Automation.WildcardPattern]::Escape($Base)
         $p = Join-Path $b $Rel
-        if ($FilesOnly) { return @(Get-ChildItem -Path $p -File -ErrorAction SilentlyContinue) }
-        return @(Get-ChildItem -Path $p -Directory -ErrorAction SilentlyContinue)
+        $found = @()
+        if ($FilesOnly) { $found = @(Get-ChildItem -Path $p -File -ErrorAction SilentlyContinue) }
+        else { $found = @(Get-ChildItem -Path $p -Directory -ErrorAction SilentlyContinue) }
+        return @($found | Where-Object { Test-RootPath $_.FullName })
     } catch { return @() }
 }
 
@@ -349,13 +459,18 @@ function Find-IisPhpRegistrations {
         }
         return
     }
+    if (-not (Test-RegularFile $cfg 2097152)) { return }
     $xml = New-Object System.Xml.XmlDocument
     try {
         $rs = New-Object System.Xml.XmlReaderSettings
         $rs.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
         $rs.XmlResolver = $null
-        $reader = [System.Xml.XmlReader]::Create($cfg, $rs)
-        try { $xml.Load($reader) } finally { $reader.Close() }
+        $rs.MaxCharactersInDocument = 2097152
+        $content = Read-SafeText $cfg
+        if ($null -eq $content) { return }
+        $sr = New-Object IO.StringReader($content)
+        $reader = [System.Xml.XmlReader]::Create($sr, $rs)
+        try { $xml.Load($reader) } finally { $reader.Close(); $sr.Dispose() }
     } catch {
         $script:IisConfigDenied = $true
         Add-Warn ('applicationHost.config 를 읽거나 파싱하지 못했습니다 ({0}). 관리자 권한으로 다시 실행하세요.' -f $_.Exception.Message)
@@ -373,12 +488,13 @@ function Find-IisPhpRegistrations {
 
     foreach ($app in @($xml.SelectNodes('//fastCgi/application'))) {
         $full = $app.GetAttribute('fullPath')
-        if ([string]::IsNullOrEmpty($full)) { continue }
+        if ([string]::IsNullOrEmpty($full) -or $full.Length -gt 4096) { continue }
         if ([System.IO.Path]::GetFileName($full.Replace('\', '/')) -notmatch '^(?i)php[\w.-]*\.exe$') { continue }
         $inst = Add-Binary (Resolve-FsPath $full) 'IIS FastCGI 등록' 'cgi'
         if ($null -eq $inst) { continue }
         $inst.Iis = $true
         $argText = $app.GetAttribute('arguments')
+        if ($argText.Length -gt 4096) { $argText = $argText.Substring(0, 4096) }
         if ($argText) {
             $am = [regex]::Match($argText, '(?:^|\s)-c\s+("[^"]+"|\S+)')
             if ($am.Success) { $inst.IniFile = (Resolve-FsPath $am.Groups[1].Value.Trim('"')) }
@@ -386,13 +502,14 @@ function Find-IisPhpRegistrations {
         foreach ($ev in @($app.SelectNodes('environmentVariables/environmentVariable'))) {
             $n = $ev.GetAttribute('name')
             $v = $ev.GetAttribute('value')
+            if ($n.Length -gt 4096 -or $v.Length -gt 4096) { continue }
             if ($n -ieq 'PHPRC') { $inst.Phprc = (Resolve-FsPath $v) }
             elseif ($n -ieq 'PHP_INI_SCAN_DIR') { $inst.ScanDir = $v }
         }
     }
     foreach ($h in @($xml.SelectNodes('//handlers/add'))) {
         $sp = $h.GetAttribute('scriptProcessor')
-        if ([string]::IsNullOrEmpty($sp)) { continue }
+        if ([string]::IsNullOrEmpty($sp) -or $sp.Length -gt 4096) { continue }
         $exe = $sp.Split('|')[0]
         if ([System.IO.Path]::GetFileName($exe.Replace('\', '/')) -notmatch '^(?i)php[\w.-]*\.exe$') { continue }
         $inst = Add-Binary (Resolve-FsPath $exe) 'IIS 핸들러 매핑' 'cgi'
@@ -449,6 +566,11 @@ function Expand-ApacheVars {
 function Resolve-ApachePath {
     param([string]$Path, [string]$RealRoot)
     $p = $Path.Trim().Trim('"')
+    if (-not $p -or -not $RealRoot) { return '' }
+    if ($script:RootDir -and @($p.Replace('\', '/').Split('/') | Where-Object { $_ -eq '..' }).Count -gt 0) {
+        Add-Warn ('-Root 설정 경로의 .. 거부: ' + (ConvertTo-SafeText $Path))
+        return ''
+    }
     if ($p -match '^([A-Za-z]:|[\\/])') { return (Resolve-FsPath $p) }
     return (Join-Path $RealRoot $p)
 }
@@ -461,10 +583,8 @@ function Read-ApacheConfFile {
     if ($Defs['__visited'].ContainsKey($vk)) { return }
     $Defs['__visited'][$vk] = $true
     $lines = @()
-    try { $lines = @(Get-Content -LiteralPath $File -ErrorAction Stop) } catch {
-        Add-Warn ('Apache 설정 파일을 읽지 못했습니다: {0}' -f $File)
-        return
-    }
+    if (-not (Test-RegularFile $File 2097152)) { return }
+    $lines = @(Read-SafeLines $File)
     foreach ($raw in $lines) {
         $line = ([string]$raw).Trim()
         if ($line.Length -eq 0 -or $line.StartsWith('#')) { continue }
@@ -472,7 +592,11 @@ function Read-ApacheConfFile {
         if ($m.Success) { $Defs[$m.Groups[1].Value] = $m.Groups[2].Value.Trim().Trim('"'); continue }
         $line = Expand-ApacheVars $line $Defs
         $m = [regex]::Match($line, '^ServerRoot\s+(.+)$', 'IgnoreCase')
-        if ($m.Success) { $Defs['__root'] = (Resolve-FsPath $m.Groups[1].Value.Trim().Trim('"')); continue }
+        if ($m.Success) {
+            $newRoot = Resolve-FsPath $m.Groups[1].Value.Trim().Trim('"')
+            if ($newRoot) { $Defs['__root'] = $newRoot }
+            continue
+        }
         $m = [regex]::Match($line, '^LoadModule\s+(\w*php\w*)\s+("[^"]+"|\S+)', 'IgnoreCase')
         if ($m.Success) {
             $Found.Add([pscustomobject]@{ Type = 'module'; Path = (Resolve-ApachePath $m.Groups[2].Value $Defs['__root']); Conf = $File })
@@ -491,6 +615,8 @@ function Read-ApacheConfFile {
         $m = [regex]::Match($line, '^Include(Optional)?\s+("[^"]+"|\S+)', 'IgnoreCase')
         if ($m.Success) {
             $target = Resolve-ApachePath $m.Groups[2].Value $Defs['__root']
+            if (-not $target) { continue }
+            if ($target -notmatch '[*?]' -and -not (Test-RootPath $target)) { continue }
             if (Test-Path -LiteralPath $target -PathType Container) {
                 foreach ($f in @(Get-ChildItem -LiteralPath $target -Filter '*.conf' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
                     Read-ApacheConfFile $f.FullName $Defs $Found ($Depth + 1)
@@ -500,6 +626,7 @@ function Read-ApacheConfFile {
             } elseif ($target -match '[*?]') {
                 $d = Split-Path -Parent $target
                 $leaf = Split-Path -Leaf $target
+                if (-not (Test-RootPath $d)) { continue }
                 if (Test-Path -LiteralPath $d -PathType Container) {
                     foreach ($f in @(Get-ChildItem -LiteralPath $d -Filter $leaf -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
                         Read-ApacheConfFile $f.FullName $Defs $Found ($Depth + 1)
@@ -609,44 +736,126 @@ function Find-CommonPhpDirs {
 # ---------------------------------------------------------------------------
 # 버전 / 벤더 증거 / php.ini
 # ---------------------------------------------------------------------------
-function Invoke-PhpVersion {
-    # `exe -n -v` (ini 로드 없음). 10초 제한. 취약점과 무관한 버전 출력만 사용한다.
-    param([string]$Exe)
+function Get-TrustAcl {
+    param([string]$Path)
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $rules = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($ace in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        $rules.Add([pscustomobject]@{
+            Sid = $ace.IdentityReference.Value
+            Allow = ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow)
+            InheritOnly = (($ace.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0)
+            Rights = [long]$ace.FileSystemRights
+        })
+    }
+    return [pscustomobject]@{ Owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; Rules = @($rules.ToArray()) }
+}
+
+function Test-TrustedPath {
+    # 모든 상위 폴더(드라이브 루트 포함)를 확인한다. ACL reader를 주입하여 Windows 밖에서도 정책을 검증한다.
+    param([string]$Path, [scriptblock]$AclReader = { param($p) Get-TrustAcl $p })
+    $owners = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    $untrusted = @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')
+    # WriteData/CreateFiles, AppendData/CreateDirectories, WriteEA/Attributes, Delete, DeleteChild, WRITE_DAC, WRITE_OWNER.
+    $writeMask = [long]0x000D0156
     try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $Exe
-        $psi.Arguments = '-n -v'
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-        $psi.WorkingDirectory = [System.IO.Path]::GetTempPath()
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        $so = $proc.StandardOutput.ReadToEndAsync()
-        $se = $proc.StandardError.ReadToEndAsync()
-        if (-not $proc.WaitForExit(10000)) {
-            try { $proc.Kill() } catch { }
-            return $null
+        $current = [IO.Path]::GetFullPath($Path)
+        if (-not (Test-RegularFile $current)) { return $false }
+        while ($current) {
+            $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+            $acl = & $AclReader $current
+            if ($null -eq $acl -or $owners -notcontains $acl.Owner) { return $false }
+            foreach ($rule in @($acl.Rules)) {
+                if ($rule.Allow -and -not $rule.InheritOnly -and $untrusted -contains $rule.Sid -and (([long]$rule.Rights -band $writeMask) -ne 0)) { return $false }
+            }
+            $parent = [IO.Path]::GetDirectoryName($current)
+            if (-not $parent -or $parent -eq $current) { break }
+            $current = $parent
         }
-        $proc.WaitForExit()
-        $text = [string]$so.Result
-        foreach ($l in ($text -split "`r?`n")) {
-            if ($l -match '^PHP\s+\d') { return $l.Trim() }
-        }
-        return $null
-    } catch { return $null }
+        return $true
+    } catch { return $false }
+}
+
+function Get-ExecMode {
+    if ($script:NoExecMode) { return 'never' }
+    if ($script:ExecInRoot) { return 'all' }
+    if ($script:RootDir) { return 'never' }
+    return 'auto'
 }
 
 function Test-ExecAllowed {
-    # -NoExec 가 최우선. -Root 에서는 신뢰할 수 있는 트리에서 -Exec 를 줘야만 실행한다(기본: 실행 안 함).
-    if ($script:NoExecMode) { return $false }
-    if ($script:RootDir -and -not $script:ExecInRoot) { return $false }
-    return $true
+    param([string]$Path = '', [string]$ExecMode = '', $Privileged = $script:Elevated,
+          [scriptblock]$TrustCheck = { param($p) Test-TrustedPath $p })
+    if (-not $ExecMode) { $ExecMode = Get-ExecMode }
+    if ($ExecMode -eq 'never') { return $false }
+    if (-not (Test-RegularFile $Path)) { return $false }
+    if ($ExecMode -eq 'all') { return $true }
+    if ($Privileged -eq $false) { return $true }
+    return [bool](& $TrustCheck $Path)
+}
+
+function Invoke-PhpVersion {
+    # 절대 경로, 최소 환경, stdin 닫음, 10초 제한. stdout/stderr 각 2048바이트(합계 최대 4096).
+    param([string]$Exe)
+    $proc = $null
+    try {
+        if (-not (Test-RegularFile $Exe)) { return $null }
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = [IO.Path]::GetFullPath($Exe)
+        $psi.Arguments = '-n -v'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.EnvironmentVariables.Clear()
+        if ($script:OnWindows) {
+            $win = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+            $psi.EnvironmentVariables['SystemRoot'] = $win
+            $psi.EnvironmentVariables['PATH'] = [IO.Path]::Combine($win, 'System32')
+            $psi.WorkingDirectory = [IO.Path]::Combine($win, 'System32')
+        } else {
+            $psi.EnvironmentVariables['LC_ALL'] = 'C'
+            $psi.EnvironmentVariables['PATH'] = '/usr/sbin:/usr/bin:/sbin:/bin'
+            $psi.WorkingDirectory = '/'
+        }
+        $proc = [Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Close()
+        $streams = @($proc.StandardOutput.BaseStream, $proc.StandardError.BaseStream)
+        $buffers = @((New-Object 'byte[]' 2048), (New-Object 'byte[]' 2048))
+        $counts = @(0, 0)
+        $done = @($false, $false)
+        $tasks = @($streams[0].ReadAsync($buffers[0], 0, 2048), $streams[1].ReadAsync($buffers[1], 0, 2048))
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            for ($n = 0; $n -lt 2; $n++) {
+                if (-not $done[$n] -and $tasks[$n].IsCompleted) {
+                    $got = $tasks[$n].Result
+                    $counts[$n] += $got
+                    if ($got -eq 0 -or $counts[$n] -ge 2048) { $done[$n] = $true }
+                    else { $tasks[$n] = $streams[$n].ReadAsync($buffers[$n], $counts[$n], 2048 - $counts[$n]) }
+                }
+            }
+            if (($done[0] -and $done[1]) -or $counts[0] -ge 2048 -or $counts[1] -ge 2048) { break }
+            [Threading.Thread]::Sleep(10)
+        }
+        if (-not $proc.HasExited) { $proc.Kill() }
+        $text = [Text.Encoding]::UTF8.GetString($buffers[0], 0, $counts[0])
+        foreach ($line in ($text -split "`r?`n")) { if ($line -match '^PHP\s+\d') { return $line.Trim() } }
+        return $null
+    } catch { return $null } finally {
+        if ($null -ne $proc) {
+            try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+            $proc.Dispose()
+        }
+    }
 }
 
 function Get-BinaryVersion {
     # 실행하지 않고 파일의 'PHP/X.Y.Z' 문자열(X-Powered-By 헤더 상수)에서 버전을 읽는다. 추정이므로 보조 수단이다.
     param([string]$Path)
+    if (-not (Test-RegularFile $Path 125829120)) { return '' }
     $fs = $null
     try {
         $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
@@ -654,8 +863,8 @@ function Get-BinaryVersion {
         $buf = New-Object 'byte[]' 4194368
         $carry = 0
         $total = [long]0
-        while ($total -lt 134217728) {
-            $n = $fs.Read($buf, $carry, $buf.Length - $carry)
+        while ($total -lt 125829120) {
+            $n = $fs.Read($buf, $carry, [int][Math]::Min($buf.Length - $carry, 125829120 - $total))
             if ($n -le 0) { break }
             $total = $total + $n
             $len = $carry + $n
@@ -671,22 +880,27 @@ function Get-BinaryVersion {
 function Get-InstVersion {
     param($Inst)
     $res = @{ Text = ''; Source = ''; Notes = (New-Object 'System.Collections.Generic.List[string]') }
-    if ($script:RootDir) {
+    # 명시적 테스트 환경에서만 fixture 지름길 허용. 일반 -Root 검사에서는 php.version을 신뢰하지 않는다.
+    if ($script:RootDir -and $env:PHP2SHELL_TEST_VERSION_FILE -eq '1') {
         $vf = Join-Path $Inst.Dir 'php.version'
-        if (Test-Path -LiteralPath $vf -PathType Leaf) {
+        if (Test-RegularFile $vf 2097152) {
             $first = ''
-            foreach ($l in @(Get-Content -LiteralPath $vf -ErrorAction SilentlyContinue)) { if (([string]$l).Trim()) { $first = ([string]$l).Trim(); break } }
+            foreach ($l in @(Read-SafeLines $vf)) { if (([string]$l).Trim()) { $first = ([string]$l).Trim(); break } }
             $res.Text = $first
             $res.Source = '테스트 fixture(php.version)'
             return $res
         }
     }
     $bins = @($Inst.Binaries)
-    if (Test-ExecAllowed) {
+    if ((Get-ExecMode) -ne 'never') {
         foreach ($want in @('cli', 'cgi')) {
             foreach ($b in $bins) {
                 if ((Get-BinKind $b) -ne $want) { continue }
                 if ([System.IO.Path]::GetFileName($b) -imatch '^php-win\.exe$') { continue }
+                if (-not (Test-ExecAllowed $b)) {
+                    $res.Notes.Add('실행 안 함: 신뢰할 수 없는 위치(쓰기 가능하거나 소유자가 root/관리자가 아님)')
+                    continue
+                }
                 $out = Invoke-PhpVersion $b
                 if ($out -and $null -ne (ConvertFrom-PhpVersion $out)) {
                     $res.Text = $out
@@ -704,6 +918,7 @@ function Get-InstVersion {
     foreach ($want in @('cgi', 'cli', 'apache', 'ts')) {
         foreach ($b in $bins) {
             if ((Get-BinKind $b) -ne $want) { continue }
+            if (-not (Test-RegularFile $b)) { continue }
             $v = ''
             try {
                 $vi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($b)
@@ -752,33 +967,13 @@ function Get-InstVersion {
     return $res
 }
 
-function Get-VendorEvidence {
-    # NEWS/changelog 류 텍스트에 두 CVE ID 가 모두 있어야 'yes'. Windows 에는 패키지 DB 가 없어 부재를 증명할 수 없으므로 없으면 'unknown'.
-    param([string]$Dir)
-    $found = ''
-    try {
-        foreach ($f in @([System.IO.Directory]::GetFiles($Dir))) {
-            $n = [System.IO.Path]::GetFileName($f)
-            if ($n -notmatch '^(?i)(news|changelog|changes|readme)[\w.-]*$') { continue }
-            $len = 0
-            try { $len = (New-Object System.IO.FileInfo $f).Length } catch { continue }
-            if ($len -gt 8MB) { continue }
-            $sr = $null
-            $txt = ''
-            try { $sr = New-Object System.IO.StreamReader($f); $txt = $sr.ReadToEnd() } catch { $txt = '' } finally { if ($null -ne $sr) { $sr.Dispose() } }
-            $all = $true
-            foreach ($c in $script:Cves) { if ($txt.IndexOf($c, [StringComparison]::OrdinalIgnoreCase) -lt 0) { $all = $false } }
-            if ($all) { $found = $n; break }
-        }
-    } catch { }
-    return $found
-}
 
 function Read-IniSettings {
     # php.ini 를 정적 파싱한다(php -i 는 CLI 용 ini 를 읽어 웹 SAPI 와 다를 수 있으므로 쓰지 않는다). 마지막 값이 우선.
     param([string]$File, [hashtable]$Into)
     $lines = @()
-    try { $lines = @(Get-Content -LiteralPath $File -ErrorAction Stop) } catch { return $false }
+    if (-not (Test-RegularFile $File 2097152)) { return $false }
+    $lines = @(Read-SafeLines $File)
     foreach ($raw in $lines) {
         $line = ([string]$raw).Trim()
         if ($line.Length -eq 0 -or $line.StartsWith(';') -or $line.StartsWith('[')) { continue }
@@ -843,6 +1038,7 @@ function Get-MitigationNotes {
         foreach ($sd in ([string]$Inst.ScanDir).Split(';')) {
             if ([string]::IsNullOrWhiteSpace($sd)) { continue }
             $real = Resolve-FsPath $sd
+            if (-not $real -or -not (Test-RootPath $real)) { continue }
             if (-not (Test-Path -LiteralPath $real -PathType Container)) { continue }
             foreach ($f in @(Get-ChildItem -LiteralPath $real -Filter '*.ini' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
                 if (Read-IniSettings $f.FullName $set) { $scanned = $scanned + ' ' + $f.Name }
@@ -890,6 +1086,7 @@ function Get-MitigationNotes {
 function Get-FileStamp {
     # 교체 시각 = LastWriteTime 과 CreationTime 중 늦은 쪽 (ZIP 해제본은 빌드 시각이 mtime 으로 남기 때문)
     param([string]$Path)
+    if (-not (Test-RegularFile $Path)) { return $null }
     try {
         $fi = New-Object System.IO.FileInfo $Path
         if (-not $fi.Exists) { return $null }
@@ -995,12 +1192,8 @@ function New-Report {
     $branch = Get-Branch $ver.Text
 
     $vendor = 'unknown'
-    $evFile = Get-VendorEvidence $Inst.Dir
-    if ($evFile) {
-        $vendor = 'yes'
-        $notes.Add(('벤더 패치 증거: {0} 에 {1} 가 모두 언급됨. 변경 내역을 직접 확인하세요.' -f $evFile, ($script:Cves -join ', ')))
-    } elseif ($cls -ne 'fixed') {
-        $notes.Add('Windows 에는 패키지 변경 내역 DB 가 없어 벤더 패치 여부를 확인할 수 없습니다(NEWS/changelog 에 두 CVE 언급 없음).')
+    if ($cls -ne 'fixed') {
+        $notes.Add('Windows에서는 패키지 변경 내역 DB가 없어 벤더 패치를 확인하지 않습니다(vendor_patch=unknown). README/NEWS의 CVE 언급은 증거로 인정하지 않습니다.')
     }
     $verdict = Get-Verdict $cls $vendor
 
@@ -1080,7 +1273,7 @@ function Get-PlanLines {
     $L = New-Object 'System.Collections.Generic.List[string]'
     $L.Add('=== 조치 계획 (Windows) ===')
     $L.Add('업데이트만이 근본 조치입니다. 아래 임시 조치는 일부 공격 경로만 줄이며 안전을 보장하지 않습니다.')
-    $L.Add('이 스크립트는 아무것도 변경하지 않았습니다. 아래 명령은 출력만 한 것이며 관리자 PowerShell 에서 직접 검토 후 실행하세요.')
+    $L.Add('서버 설정·패키지를 바꾸지 않았습니다. 신뢰할 수 있는 PHP 바이너리만 -n -v 로 실행합니다(-NoExec 로 끌 수 있음). 아래 조치 명령은 출력만 했습니다.')
     $L.Add('')
 
     $branches = New-Object 'System.Collections.Generic.List[string]'
@@ -1137,7 +1330,7 @@ function Get-PlanLines {
         $svc = 'Apache2.4'
         if ($script:ApacheServices.Count -gt 0) { $svc = $script:ApacheServices[0] }
         $L.Add('  Apache:')
-        $L.Add(('      Stop-Service -Name ''{0}''' -f $svc))
+        $L.Add(('      Stop-Service -Name {0}' -f (ConvertTo-PsLiteral $svc)))
         if ($script:ApacheServices.Count -gt 1) { $L.Add(('      # 발견된 Apache 서비스: {0}' -f ($script:ApacheServices -join ', '))) }
     }
     $stampDir = '20261023'
@@ -1146,9 +1339,9 @@ function Get-PlanLines {
     foreach ($d in $dirs) {
         if ($vendorDirs.Contains($d)) { continue }
         $L.Add(('  교체: {0}' -f $d))
-        $L.Add(('      Rename-Item -LiteralPath ''{0}'' -NewName ''{1}.old-{2}''' -f $d, (Split-Path -Leaf $d), $stampDir))
-        $L.Add(('      Expand-Archive -LiteralPath {0} -DestinationPath ''{1}''' -f $zipVar, $d))
-        $L.Add(('      Copy-Item -LiteralPath ''{0}.old-{1}\php.ini'' -Destination ''{0}\php.ini''' -f $d, $stampDir))
+        $L.Add(('      Rename-Item -LiteralPath {0} -NewName {1}' -f (ConvertTo-PsLiteral $d), (ConvertTo-PsLiteral ((Split-Path -Leaf $d) + '.old-' + $stampDir))))
+        $L.Add(('      Expand-Archive -LiteralPath {0} -DestinationPath {1}' -f $zipVar, (ConvertTo-PsLiteral $d)))
+        $L.Add(('      Copy-Item -LiteralPath {0} -Destination {1}' -f (ConvertTo-PsLiteral ($d + '.old-' + $stampDir + '\php.ini')), (ConvertTo-PsLiteral ($d + '\php.ini'))))
     }
     $L.Add('      # 확장(ext) 디렉터리 경로와 새 php.ini-production 의 변경점도 비교하세요.')
     foreach ($d in $vendorDirs) {
@@ -1171,7 +1364,7 @@ function Get-PlanLines {
     if ($hasApache -or -not $hasIis) {
         $svc = 'Apache2.4'
         if ($script:ApacheServices.Count -gt 0) { $svc = $script:ApacheServices[0] }
-        $L.Add(('      Start-Service -Name ''{0}''   # mod_php 는 Stop/Start 로 DLL 을 다시 로드해야 합니다(graceful restart 만으로는 불충분할 수 있음)' -f $svc))
+        $L.Add(('      Start-Service -Name {0}   # mod_php 는 전체 Stop/Start로 DLL을 다시 로드' -f (ConvertTo-PsLiteral $svc)))
     }
     $L.Add('  재시작은 모든 워커가 대상입니다. 파일만 교체하면 실행 중 프로세스는 계속 이전 코드를 사용합니다.')
     $L.Add('')
@@ -1235,25 +1428,25 @@ function Get-SourceLines {
 
 function Get-HelpLines {
     return @(
-        'php2shell-quickcheck.ps1 - PHP2Shell(CVE-2026-109618 / CVE-2026-109619) Windows 점검 (방어 전용, 읽기 전용)',
+        'php2shell-quickcheck.ps1 - PHP2Shell(CVE-2026-109618 / CVE-2026-109619) Windows 점검 (방어 전용)',
         '',
         '사용법:  powershell -NoProfile -ExecutionPolicy Bypass -File .\php2shell-quickcheck.ps1 [옵션]',
         '',
         '옵션:',
         '  -Json          기계 판독용 JSON 을 출력합니다.',
-        '  -NoExec        발견한 어떤 바이너리도 실행하지 않고 파일 버전정보만 사용합니다.',
-        '  -Exec          -Root 와 함께만 의미가 있습니다. 신뢰할 수 있는 트리에서 php.exe/php-cgi.exe -n -v 실행을 허용합니다(-NoExec 가 우선).',
-        '                 -Root 에서는 기본적으로 실행 파일을 실행하지 않고 파일 버전정보/바이너리 문자열로만 판단합니다.',
+        '  -NoExec        발견한 어떤 바이너리도 실행하지 않고 파일 버전정보/바이너리 문자열을 사용합니다.',
+        '  -Exec          신뢰하는 호스트에서만 사용하세요. 신뢰 검사를 우회하여 발견한 PHP 바이너리를 -n -v 로 실행합니다(-NoExec 가 우선).',
+        '                 -Root 에서는 -Exec 없이는 실행하지 않습니다.',
         '  -Offline       오프라인/폐쇄망 서버용 패치 절차(다른 PC 에서 ZIP/SHA-256 확보 -> 이동매체 -> 교체)를 조치 계획에 추가합니다.',
         '  -PlanFile <경로> 이 서버(탐지한 PHP 경로·서비스·SAPI) 맞춤 조치 계획을 관리자가 검토하는 .ps1 파일로 저장합니다.',
         '                 생성 파일은 환경 변수 PHP2SHELL_I_REVIEWED=yes 가 없으면 종료 코드 64 로 끝나며, 위험 단계마다 y/N 확인을 묻습니다.',
-        '                 이 도구는 그 명령을 절대 실행하지 않습니다(자동 패치 없음).',
-        '  -Root <경로>   <경로>를 파일시스템 루트(C:\ 와 동일)로 간주하고 라이브 프로세스/서비스 점검을 건너뜁니다(테스트용).',
+        '                 이 도구는 그 명령을 절대 실행하지 않습니다(자동 패치 없음). 기존 파일은 덮어쓰지 않으며 종료 코드 2로 거부합니다.',
+        '  -Root <경로>   <경로>를 파일시스템 루트로 간주하고 라이브 프로세스/서비스 점검을 건너뜁니다(오프라인 트리 검사).',
         '  -Help          이 도움말을 출력합니다.',
         '',
         '종료 코드:  0 = 조치 필요 없음 / 1 = 취약·EOL 또는 수정됐으나 이전 코드 실행 중 / 3 = 판단 불가',
         '',
-        '이 스크립트는 파일/레지스트리를 읽기만 하며 네트워크 호출, 서비스 재시작, 파일 변경을 하지 않습니다.',
+        '서버 설정·패키지를 바꾸지 않습니다. 기본적으로 신뢰할 수 있는 PHP 바이너리만 -n -v 로 실행합니다(-NoExec 로 끌 수 있음). 의심되는 호스트에서는 -NoExec 를 쓰세요.',
         '관리자 권한 없이도 실행되지만 다른 계정(IIS 앱 풀 ID 등)의 프로세스 정보와 applicationHost.config 는 읽지 못할 수 있습니다.',
         '',
         '출력 인코딩: 한글과 JSON 은 항상 BOM 없는 UTF-8 로 출력합니다. cp949 콘솔에서 한글이 깨지면 먼저 `chcp 65001` 을 실행하거나 Windows Terminal 에서 실행하세요.',
@@ -1266,7 +1459,7 @@ function ConvertTo-ReportText {
     $L = New-Object 'System.Collections.Generic.List[string]'
     $L.Add('PHP2Shell (CVE-2026-109618 / CVE-2026-109619) 점검 - Windows (PowerShell)')
     $L.Add(('기준일: {0}   호스트: {1}   플랫폼: {2}' -f $script:AsOf, $HostName, $Platform))
-    $L.Add('방식: 파일/프로세스/설정 정적 분석(php -i 미사용). 읽기 전용이며 어떤 것도 변경하지 않습니다.')
+    $L.Add('방식: 파일/프로세스/설정 정적 분석(php -i 미사용). 서버 설정·패키지를 바꾸지 않습니다. 신뢰할 수 있는 PHP만 -n -v 로 실행(-NoExec 로 끔).')
     $L.Add('')
     foreach ($w in $script:Warnings) { $L.Add('[주의] ' + $w) }
     if ($script:Warnings.Count -gt 0) { $L.Add('') }
@@ -1309,7 +1502,7 @@ function ConvertTo-ReportText {
     foreach ($p in (Get-EvidenceLines)) { $L.Add($p) }
     $L.Add('')
     foreach ($p in (Get-SourceLines)) { $L.Add($p) }
-    return ($L -join "`n")
+    return ((@($L | ForEach-Object { ConvertTo-SafeText $_ })) -join "`n")
 }
 
 function Get-PlatformString {
@@ -1324,12 +1517,13 @@ function Get-PlatformString {
 
 function ConvertTo-PsLiteral {
     param([string]$Text)
-    return ("'" + $Text.Replace("'", "''") + "'")
+    $safe = ConvertTo-SafeText $Text
+    return ("'" + [regex]::Replace($safe, "['\u2018\u2019\u201a\u201b]", '$0$0') + "'")
 }
 
 function ConvertTo-CommentText {
     param([string]$Text)
-    return ($Text -replace '[\r\n]+', ' ')
+    return (ConvertTo-SafeText $Text)
 }
 
 function New-PlanScript {
@@ -1346,6 +1540,10 @@ function New-PlanScript {
     foreach ($p in $Pairs) {
         $r = $p.Report
         $i = $p.Inst
+        if ($i.Dir -match '[\x00-\x1f\x7f-\x9f\u2028\u2029]') {
+            $review.Add((ConvertTo-SafeText $i.Dir))
+            continue
+        }
         $isReplace = ($r.verdict -eq 'vulnerable' -or $r.verdict -eq 'eol')
         $isRestart = ($r.needs_restart -eq $true -and -not $isReplace)
         if ($r.verdict -eq 'unknown') { Add-Unique $review $i.Dir }
@@ -1412,8 +1610,11 @@ function New-PlanScript {
     $S.Add('    exit 65')
     $S.Add('}')
     $S.Add('Invoke-Step ''증거 스냅샷 저장(프로세스/연결 목록을 CSV 로 저장; 로그/덤프는 직접 수집)'' {')
-    $S.Add('    $ev = Join-Path $env:SystemDrive (''p2s-evidence-'' + (Get-Date -Format ''yyyyMMdd-HHmmss''))')
+    $S.Add('    $ev = $env:SystemDrive + ''\p2s-evidence-'' + [guid]::NewGuid().ToString(''N'')')
     $S.Add('    [void](New-Item -ItemType Directory -Path $ev)')
+    $S.Add('    $icacls = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows), ''System32\icacls.exe'')')
+    $S.Add('    & $icacls $ev /inheritance:r /grant:r ''*S-1-5-32-544:(OI)(CI)F'' ''*S-1-5-18:(OI)(CI)F'' | Out-Null')
+    $S.Add('    if ($LASTEXITCODE -ne 0) { throw ''증거 폴더 ACL 제한 실패: 데이터 수집을 중지합니다.'' }')
     $S.Add('    Get-Process -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, Path, StartTime | Export-Csv -NoTypeInformation -LiteralPath (Join-Path $ev ''processes.csv'')')
     $S.Add('    if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) { Get-NetTCPConnection | Export-Csv -NoTypeInformation -LiteralPath (Join-Path $ev ''connections.csv'') }')
     $S.Add('    Write-Output (''저장됨: '' + $ev)')
@@ -1462,10 +1663,10 @@ function New-PlanScript {
         $S.Add('# IIS 만 멈추려면 앱 풀 단위(Import-Module WebAdministration; Stop-WebAppPool -Name <풀이름>)도 가능합니다.')
         if ($script:IisPools.Count -gt 0) { $S.Add('# 이 서버의 앱 풀: ' + (ConvertTo-CommentText ($script:IisPools -join ', '))) }
         if ($script:IisSites.Count -gt 0) { $S.Add('# 이 서버의 사이트: ' + (ConvertTo-CommentText ($script:IisSites -join ', '))) }
-        $S.Add('Invoke-Step ''IIS 중지 (W3SVC/WAS 포함: iisreset /stop)'' { iisreset /stop }')
+        $S.Add('Invoke-Step ''IIS 중지 (W3SVC/WAS 포함: iisreset /stop)'' { & ([IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows), ''System32\iisreset.exe'')) /stop; if ($LASTEXITCODE -ne 0) { throw ''IIS 중지 실패'' } }')
     }
     foreach ($sv in $svcs) {
-        $S.Add('Invoke-Step (''Apache 서비스 중지: '' + ' + (ConvertTo-PsLiteral $sv) + ') { Stop-Service -Name ' + (ConvertTo-PsLiteral $sv) + ' }')
+        $S.Add('Invoke-Step ''Apache 서비스 중지(경로/이름은 확인 후 평가)'' { Stop-Service -Name ' + (ConvertTo-PsLiteral $sv) + ' }')
     }
     if (-not $hasIis -and $svcs.Count -eq 0) { $S.Add('# 연결된 IIS/Apache 서비스를 확인하지 못했습니다. 이 PHP 를 사용하는 서비스를 직접 중지하세요.') }
     foreach ($c in $cgiPaths) { $S.Add('# php-cgi: ' + (ConvertTo-CommentText $c)) }
@@ -1485,7 +1686,7 @@ function New-PlanScript {
                 $S.Add('# 주의 ' + (ConvertTo-CommentText $t.Dir) + ': 같은 브랜치의 수정 릴리스가 없습니다. 지원되는 브랜치(8.3 이상)의 ZIP 으로 교체하려면 앱 호환성을 먼저 테스트하세요.')
             }
             $lit = ConvertTo-PsLiteral $t.Dir
-            $S.Add('Invoke-Step (''PHP 폴더 교체: '' + ' + $lit + ') {')
+            $S.Add('Invoke-Step ''PHP 폴더 교체(대상 경로는 확인 후 평가)'' {')
             $S.Add('    if (-not $script:ZipPath) { throw ''1단계(ZIP 체크섬 검증)를 먼저 완료하세요.'' }')
             $S.Add('    $dir = ' + $lit)
             $S.Add('    $old = $dir + ''.old-'' + (Get-Date -Format ''yyyyMMdd-HHmmss'')')
@@ -1504,9 +1705,9 @@ function New-PlanScript {
     $S.Add('# ---------------------------------------------------------------------------')
     $S.Add('# 4단계: 서비스 시작')
     $S.Add('# ---------------------------------------------------------------------------')
-    if ($hasIis) { $S.Add('Invoke-Step ''IIS 시작 (iisreset /start)'' { iisreset /start }') }
+    if ($hasIis) { $S.Add('Invoke-Step ''IIS 시작 (iisreset /start)'' { & ([IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows), ''System32\iisreset.exe'')) /start; if ($LASTEXITCODE -ne 0) { throw ''IIS 시작 실패'' } }') }
     foreach ($sv in $svcs) {
-        $S.Add('Invoke-Step (''Apache 서비스 시작: '' + ' + (ConvertTo-PsLiteral $sv) + ') { Start-Service -Name ' + (ConvertTo-PsLiteral $sv) + ' }')
+        $S.Add('Invoke-Step ''Apache 서비스 시작(경로/이름은 확인 후 평가)'' { Start-Service -Name ' + (ConvertTo-PsLiteral $sv) + ' }')
     }
     $S.Add('')
     $S.Add('# ---------------------------------------------------------------------------')
@@ -1524,14 +1725,21 @@ function New-PlanScript {
 
 function Save-PlanFile {
     param([string]$Path, [string]$Content)
+    $stream = $null
     try {
         $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
-        [System.IO.File]::WriteAllText($full, $Content, (New-Object System.Text.UTF8Encoding($true)))
+        # 원자적으로 새 파일만 생성: 기존 파일, 디렉터리, dangling symlink 모두 거부한다.
+        $stream = New-Object IO.FileStream($full, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $encoding = New-Object Text.UTF8Encoding($true)
+        $bom = $encoding.GetPreamble()
+        $bytes = $encoding.GetBytes($Content)
+        $stream.Write($bom, 0, $bom.Length)
+        $stream.Write($bytes, 0, $bytes.Length)
         return $full
     } catch {
-        Add-Warn ('조치 계획 파일을 저장하지 못했습니다: {0}' -f $_.Exception.Message)
+        Add-Warn ('조치 계획 파일 생성 거부(기존 파일은 덮어쓰지 않음): {0}' -f (ConvertTo-SafeText $_.Exception.Message))
         return ''
-    }
+    } finally { if ($null -ne $stream) { $stream.Dispose() } }
 }
 
 # ---------------------------------------------------------------------------
@@ -1573,7 +1781,7 @@ function Invoke-MainCore {
             $script:MainExit = 2
             return
         }
-        $script:RootDir = (Get-FullPathSafe $RootPath).TrimEnd('\', '/')
+        $script:RootDir = Get-FullPathSafe $RootPath
         if (-not $script:RootDir) { $script:RootDir = $RootPath }
     }
     $script:Insts.Clear()
@@ -1658,6 +1866,7 @@ function Invoke-MainCore {
     if ($PlanFilePath) {
         # 파일에 쓰기만 한다. 생성한 명령은 이 도구가 실행하지 않는다.
         $planSaved = Save-PlanFile $PlanFilePath (New-PlanScript $pairs)
+        if (-not $planSaved) { $exit = 2 }
     }
 
     $hostName = [System.Environment]::MachineName

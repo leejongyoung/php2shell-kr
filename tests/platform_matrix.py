@@ -10,6 +10,7 @@
 각 시나리오는 컨테이너 안에서 `php2shell_triage.py`(Python 전체판)와 `quickcheck/php2shell-quickcheck.sh`(sh 간이판)를
 모두 실행해 판정이 기대와 같고 두 구현이 서로 일치하는지 본다. 저장소는 읽기 전용으로 마운트하며 호스트는 바꾸지 않는다.
 익스플로잇은 쓰지 않는다: 점검은 버전·프로세스·설정만 읽는다.
+기본 실행 정책(auto)은 root 소유 /usr/local/bin/php만 실행하며 --exec-mode never/all 로 새 플래그도 확인할 수 있다.
 """
 import argparse
 import json
@@ -62,13 +63,14 @@ def docker(args, timeout):
     return subprocess.run(["docker"] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=timeout)
 
 
-def run_scenario(scenario, registry):
+def run_scenario(scenario, registry, exec_mode="auto"):
     image = "%s/%s" % (registry, scenario["image"]) if registry else scenario["image"]
+    flags = {"auto": "", "never": "--no-exec", "all": "--exec"}[exec_mode]
     script = (
         "set -u; %s; %s; sleep 2; "
-        "echo ==PY==; python3 /repo/php2shell_triage.py --json --no-response; echo ==PYRC=$?; "
-        "echo ==SH==; sh /repo/quickcheck/php2shell-quickcheck.sh --json; echo ==SHRC=$?"
-    ) % (scenario["setup"], scenario["start"])
+        "echo ==PY==; python3 /repo/php2shell_triage.py --json --no-response %s; echo ==PYRC=$?; "
+        "echo ==SH==; sh /repo/quickcheck/php2shell-quickcheck.sh --json %s; echo ==SHRC=$?"
+    ) % (scenario["setup"], scenario["start"], flags, flags)
     started = time.time()
     try:
         proc = docker(["run", "--rm", "-v", "%s:/repo:ro" % ROOT, image, "sh", "-c", script], timeout=900)
@@ -90,6 +92,15 @@ def run_scenario(scenario, registry):
     except (ValueError, IndexError) as exc:
         return {"name": scenario["name"], "status": "ERROR", "detail": "출력 해석 실패: %s" % exc}
     problems = []
+    expected_policy = {"auto": "trusted-only", "never": "never", "all": "all"}[exec_mode]
+    if py.get("exec_policy") != expected_policy:
+        problems.append("실행 정책 불일치: %s" % py.get("exec_policy"))
+    if exec_mode == "auto" and scenario["image"].startswith("php:"):
+        cli = [i for i in py["installations"] if i["path"] == "/usr/local/bin/php"]
+        if not cli or not all(i.get("executed") for i in cli):
+            problems.append("root 소유 공식 이미지 PHP CLI가 기본 정책에서 실행되지 않음")
+    if exec_mode == "never" and any(i.get("executed") for i in py["installations"]):
+        problems.append("--no-exec 에서 바이너리 실행됨")
     rows = [(os.path.basename(i["path"]), i["version"], i["verdict"], i["class"], i["vendor_patch"], i["running"], i["needs_restart"])
             for i in py["installations"]]
     advisory = triage.load_advisory()
@@ -135,6 +146,8 @@ def main(argv=None):
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--registry", default="mirror.gcr.io/library", help="이미지 레지스트리 접두사 (비우면 기본 docker.io)")
     parser.add_argument("--json", help="결과를 JSON 파일로 저장")
+    parser.add_argument("--exec-mode", choices=("auto", "never", "all"), default="auto")
+    parser.add_argument("--force", action="store_true", help="기존 JSON 결과 교체 허용")
     args = parser.parse_args(argv)
     if args.list:
         for scenario in SCENARIOS:
@@ -147,14 +160,13 @@ def main(argv=None):
     results = []
     for scenario in selected:
         print("... %s (%s)" % (scenario["name"], scenario["image"]), flush=True)
-        result = run_scenario(scenario, args.registry)
+        result = run_scenario(scenario, args.registry, args.exec_mode)
         results.append(result)
         print("%-5s %s %s" % (result["status"], result["name"], result.get("detail", "")), flush=True)
         for row in result.get("rows", []):
             print("        %-14s %-22s %-14s class=%s vendor=%s running=%s restart=%s" % row, flush=True)
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as handle:
-            json.dump(results, handle, ensure_ascii=False, indent=2)
+        triage.safe_write(args.json, json.dumps(results, ensure_ascii=False, indent=2) + "\n", force=args.force)
     failed = [r for r in results if r["status"] in ("FAIL", "ERROR")]
     print("\n통과 %d / 정보 %d / 실패 %d" % (sum(r["status"] == "PASS" for r in results), sum(r["status"] == "INFO" for r in results), len(failed)))
     return 1 if failed else 0

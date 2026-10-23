@@ -7,8 +7,8 @@
   실패가 하나라도 있으면 종료 코드 1 로 끝납니다.
 
   fixture 규칙(테스트 전용): -Root <디렉터리> 를 쓰면 점검 대상이 실제 PHP 바이너리가 아니라 빈 파일일 수 있으므로
-  각 PHP 디렉터리의 `php.version` 텍스트 파일(첫 비어 있지 않은 줄)을 버전 문자열로 우선 읽습니다. 이 훅은 -Root 가
-  있을 때만 동작합니다. -Root 에서는 기본적으로 트리 안 실행 파일을 실행하지 않으며(파일 버전정보/바이너리 문자열 기반),
+  각 PHP 디렉터리의 `php.version` 텍스트 파일을 PHP2SHELL_TEST_VERSION_FILE=1 환경변수가 명시적으로 설정된
+  테스트에서만 읽습니다(이 하네스가 설정 후 원래 값 복원). 일반 -Root 검사에서는 이 파일을 무시합니다.
   신뢰할 수 있는 트리에서만 -Exec 를 함께 주면 실행합니다(이 하네스의 -Exec 테스트는 Linux/macOS 셸 스크립트로만 수행).
   이 하네스는 취약점을 재현하는 어떤 입력도 만들지 않습니다(버전 문자열과 설정 파일만 사용).
 
@@ -26,6 +26,8 @@ $script:AdvPath = Join-Path $script:RepoRoot 'data/advisory.json'
 $script:Passed = 0
 $script:Failed = 0
 $script:TmpDirs = New-Object 'System.Collections.Generic.List[string]'
+$script:PreviousTestVersionFlag = $env:PHP2SHELL_TEST_VERSION_FILE
+$env:PHP2SHELL_TEST_VERSION_FILE = '1'
 
 function Assert-True {
     param($Condition, [string]$Message)
@@ -126,9 +128,11 @@ function Test-PlanFile {
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     Assert-True ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) ($Label + ': 계획 파일 UTF-8 BOM')
     $tokens = $null; $perrs = $null
-    [void][System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$perrs)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$perrs)
     Assert-Eq @($perrs).Count 0 ($Label + ': 계획 파일 구문 오류 없음')
     foreach ($pe in @($perrs)) { [Console]::Error.WriteLine('  파싱 오류: ' + $pe.Message + ' (줄 ' + $pe.Extent.StartLineNumber + ')') }
+    $first = $ast.EndBlock.Statements[0]
+    Assert-True ($first -is [System.Management.Automation.Language.IfStatementAst] -and $first.Extent.Text.Contains('PHP2SHELL_I_REVIEWED') -and $first.Extent.Text.Contains('exit 64')) ($Label + ': 검토 가드가 첫 실행문')
     $g = Invoke-ChildStdinClosed $Path @{}
     Assert-Eq $g.Code 64 ($Label + ': 가드(PHP2SHELL_I_REVIEWED 없음) 종료 코드 64')
     Assert-True ($g.Text.Contains('PHP2SHELL_I_REVIEWED')) ($Label + ': 가드 메시지')
@@ -389,17 +393,17 @@ try {
         }
     }
 
-    # 2-7 벤더 패치 증거(NEWS 에 두 CVE 모두): 7.4 + 증거 -> vendor_patched, 종료 코드 0
+    # 2-7 Windows에서는 README/NEWS에 두 CVE가 있어도 벤더 패치 증거가 아니다.
     $fx = New-TmpDir
     Add-PhpDir $fx 'php' '7.4.33'
     Add-TestFile $fx 'php/news.txt' "Backported fixes: CVE-2026-109618, CVE-2026-109619`n"
     $r = Invoke-QcJson $fx
-    Assert-Eq $r.Code 0 '벤더 패치 증거 종료 코드 0'
+    Assert-Eq $r.Code 1 'NEWS 언급으로 취약 판정을 바꾸지 않음'
     if ($null -ne $r.Obj) {
         $i = Get-InstList $r.Obj
-        Assert-Eq $i[0].verdict 'vendor_patched' '벤더 패치 verdict'
-        Assert-Eq $i[0].vendor_patch 'yes' '벤더 패치 yes'
-        Assert-Eq $r.Obj.summary.vendor_patched 1 '요약 vendor_patched'
+        Assert-Eq $i[0].verdict 'vulnerable' 'NEWS 양쪽 CVE 언급도 vulnerable'
+        Assert-Eq $i[0].vendor_patch 'unknown' 'Windows vendor_patch 항상 unknown'
+        Assert-Eq $r.Obj.summary.vendor_patched 0 '요약 vendor_patched 0'
     }
     # 하나만 언급하면 증거가 아니다
     $fx = New-TmpDir
@@ -497,10 +501,14 @@ try {
     # 도구는 계획 파일의 명령을 실행하지 않았다: fixture 와 시스템 드라이브에 변경 없음
     $oldDirs = @(Get-ChildItem -LiteralPath $fxQ -Recurse -Filter '*.old-*' -ErrorAction SilentlyContinue)
     Assert-Eq $oldDirs.Count 0 '계획 실행/폴더 교체가 일어나지 않음'
-    # 저장 실패(없는 디렉터리)는 경고만 하고 분석 종료 코드를 바꾸지 않는다
+    # 생성 실패는 분석 결과와 무관하게 종료 코드 2. 기존 파일/심볼릭 링크를 덮어쓰지 않는다.
     $r = Invoke-QcJson $fxOk @('-PlanFile', (Join-Path $planDir 'nodir/x.ps1'))
-    Assert-Eq $r.Code 0 'PlanFile 저장 실패해도 종료 코드는 분석 결과'
-    if ($null -ne $r.Obj) { Assert-True ((@($r.Obj.warnings) -join ' ') -match '저장하지 못했습니다') '저장 실패 경고' }
+    Assert-Eq $r.Code 2 'PlanFile 생성 실패 종료 코드 2'
+    if ($null -ne $r.Obj) { Assert-True ((@($r.Obj.warnings) -join ' ') -match '생성 거부') '생성 실패 경고' }
+    $priorPlan = [IO.File]::ReadAllText($pfOk)
+    $r = Invoke-QcJson $fxOk @('-PlanFile', $pfOk)
+    Assert-Eq $r.Code 2 '기존 PlanFile은 종료 2'
+    Assert-Eq ([IO.File]::ReadAllText($pfOk)) $priorPlan '기존 PlanFile 내용 보존'
 
     # 2-12 -Root 기본 비실행 / 바이너리 문자열 / -Exec
     $fxN = New-TmpDir
@@ -549,6 +557,133 @@ try {
         }
     } else {
         Write-Output 'SKIP: -Exec 실행 테스트는 Linux/macOS 에서만 실행됩니다.'
+    }
+
+    # 2-13 보안 회귀: fixture 지름길은 명시적 테스트 환경변수가 없으면 무시
+    $fxGate = New-TmpDir
+    Add-PhpDir $fxGate 'php' '9.9.99'
+    $env:PHP2SHELL_TEST_VERSION_FILE = $null
+    $r = Invoke-QcJson $fxGate
+    Assert-Eq $r.Code 3 'php.version 기본 무시'
+    if ($null -ne $r.Obj) { Assert-Eq (Get-InstList $r.Obj)[0].class 'unknown' '위조된 php.version은 fixed가 될 수 없음' }
+    $env:PHP2SHELL_TEST_VERSION_FILE = '1'
+    $r = Invoke-QcJson $fxGate
+    Assert-Eq $r.Code 0 '명시적 테스트 환경에서만 php.version 허용'
+
+    # ../ 경로 거부(IIS 및 Apache). 트리 밖 파일은 읽거나 실행하지 않는다.
+    $outside = New-TmpDir
+    Add-PhpDir $outside 'external' '8.4.26'
+    $fxEscape = New-TmpDir
+    $outsideName = Split-Path -Leaf $outside
+    $badPath = 'C:\..\' + $outsideName + '\external\php-cgi.exe'
+    $badXml = '<configuration><system.webServer><fastCgi><application fullPath="' + $badPath + '" /></fastCgi></system.webServer></configuration>'
+    Add-TestFile $fxEscape 'Windows/System32/inetsrv/config/applicationHost.config' $badXml
+    Add-TestFile $fxEscape 'Apache24/conf/httpd.conf' ('LoadModule php_module "../../../' + $outsideName + '/external/php8apache2_4.dll"')
+    $r = Invoke-QcJson $fxEscape @('-Exec')
+    Assert-Eq $r.Code 0 '루트 바깥 설정 경로 제외'
+    if ($null -ne $r.Obj) {
+        Assert-Eq (Get-InstList $r.Obj).Count 0 '설정의 .. 경로가 설치로 등록되지 않음'
+        Assert-True ((@($r.Obj.warnings) -join ' ') -match '\.\. 거부') '.. 거부 경고'
+    }
+
+    # ACL 정책은 가짜 SID/ACE reader를 사용해 플랫폼 독립적으로 검증한다.
+    $trustDir = New-TmpDir
+    Add-TestFile $trustDir 'php.exe' ''
+    $trustFile = Join-Path $trustDir 'php.exe'
+    $script:RootDir = ''
+    $goodAcl = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @() } }
+    Assert-True (Test-TrustedPath $trustFile $goodAcl) 'SYSTEM 소유의 모든 구성요소는 신뢰'
+    foreach ($sid in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11')) {
+        $badAcl = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @([pscustomobject]@{ Sid = $sid; Allow = $true; InheritOnly = $false; Rights = 2 }) } }
+        Assert-True (-not (Test-TrustedPath $trustFile $badAcl)) ('쓰기 가능 ACE 거부: ' + $sid)
+    }
+    $badOwner = { param($p) [pscustomobject]@{ Owner = 'S-1-5-21-123'; Rules = @() } }
+    Assert-True (-not (Test-TrustedPath $trustFile $badOwner)) '사용자 소유 파일 거부'
+    $badParent = { param($p) if ($p -eq $trustFile) { & $goodAcl $p } else { & $badOwner $p } }
+    Assert-True (-not (Test-TrustedPath $trustFile $badParent)) '신뢰하지 않는 상위 디렉터리 거부'
+    $readOnlyAcl = { param($p) [pscustomobject]@{ Owner = 'S-1-5-32-544'; Rules = @([pscustomobject]@{ Sid = 'S-1-1-0'; Allow = $true; InheritOnly = $false; Rights = 131241 }) } }
+    Assert-True (Test-TrustedPath $trustFile $readOnlyAcl) 'Everyone Read/Execute는 허용'
+    $inheritOnly = { param($p) [pscustomobject]@{ Owner = 'S-1-5-18'; Rules = @([pscustomobject]@{ Sid = 'S-1-3-0'; Allow = $true; InheritOnly = $true; Rights = 2032127 }) } }
+    Assert-True (Test-TrustedPath $trustFile $inheritOnly) 'CREATOR OWNER inherit-only는 무시'
+    Assert-True (-not (Test-ExecAllowed $trustFile 'never' $false { $true })) 'never는 언제나 실행 금지'
+    Assert-True (Test-ExecAllowed $trustFile 'all' $true { $false }) '-Exec는 신뢰 검사 우회'
+    Assert-True (Test-ExecAllowed $trustFile 'auto' $false { $false }) '비상승 계정은 자신의 권한으로 실행 허용'
+    Assert-True (-not (Test-ExecAllowed $trustFile 'auto' $true { $false })) '상승 계정은 불신 위치 실행 금지'
+    Assert-True (Test-ExecAllowed $trustFile 'auto' $true { $true }) '상승 계정은 신뢰 위치만 실행'
+
+    # 스마트 따옴표 4종 및 ASCII 따옴표: 리터럴 왕복과 인자 평가 전 실행 방지.
+    foreach ($codepoint in @(39, 8216, 8217, 8218, 8219)) {
+        $quote = [string][char]$codepoint
+        $name = 'php' + $quote + '+(Write-Output P2S_QUOTE_SENTINEL)+' + $quote + 'x'
+        $literal = ConvertTo-PsLiteral $name
+        $value = & ([scriptblock]::Create('Write-Output ' + $literal))
+        Assert-Eq $value $name ('리터럴 왕복 U+' + $codepoint)
+        $fxSmart = New-TmpDir
+        Add-PhpDir $fxSmart $name '8.4.26'
+        $pfSmart = Join-Path $planDir ('plan-smart-' + $codepoint + '.ps1')
+        $r = Invoke-QcJson $fxSmart @('-PlanFile', $pfSmart)
+        Assert-Eq $r.Code 1 '스마트 따옴표 경로 계획 생성'
+        Test-PlanFile $pfSmart ('스마트 따옴표 ' + $codepoint)
+        $planText = Get-Content -LiteralPath $pfSmart -Encoding UTF8 -Raw
+        # 실제 Confirm-Step 질문은 실행하지 않고, 증거 수집 완료 질문만 yes, 나머지 단계는 모두 no로 바꾼 안전 테스트 복사본.
+        $planTokens = $null; $planErrors = $null
+        $planAst = [Management.Automation.Language.Parser]::ParseFile($pfSmart, [ref]$planTokens, [ref]$planErrors)
+        $confirmAst = $planAst.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Confirm-Step' }, $true)
+        $stub = 'function Confirm-Step { param([string]$Message) return $Message.StartsWith(''침해 징후'') }'
+        $planText = $planText.Remove($confirmAst.Extent.StartOffset, $confirmAst.Extent.EndOffset - $confirmAst.Extent.StartOffset).Insert($confirmAst.Extent.StartOffset, $stub)
+        $pfMock = Join-Path $planDir ('plan-no-' + $codepoint + '.ps1')
+        [IO.File]::WriteAllText($pfMock, $planText, (New-Object Text.UTF8Encoding($true)))
+        $no = Invoke-ChildStdinClosed $pfMock @{ PHP2SHELL_I_REVIEWED = 'yes' }
+        Assert-True (-not $no.Text.Contains('P2S_QUOTE_SENTINEL')) '확인 거부 시 경로 인자 표현식이 실행되지 않음'
+    }
+    $hostileComment = 'safe' + [char]0x85 + [char]0x2028 + [char]0x2029 + [char]27 + "`r`nend"
+    Assert-True ((ConvertTo-CommentText $hostileComment) -notmatch '[\x00-\x1f\x7f-\x9f\u2028\u2029]') '주석의 모든 제어문자 제거'
+    Assert-Eq (ConvertTo-SafeText ("x" + [char]27 + "[1A")) 'x?[1A' '터미널 ESC 무력화'
+    $evPlan = Get-Content -LiteralPath $pfIis -Encoding UTF8 -Raw
+    Assert-True ($evPlan.Contains('System32\icacls.exe') -and $evPlan.Contains('/inheritance:r /grant:r') -and $evPlan.Contains('*S-1-5-32-544') -and $evPlan.Contains('*S-1-5-18')) '증거 디렉터리 ACL: Administrators/SYSTEM만'
+    Assert-True ($evPlan.IndexOf('/inheritance:r') -lt $evPlan.IndexOf('Export-Csv')) '민감 데이터 기록 전에 증거 ACL 제한'
+
+    # 텍스트 상한 및 파일 종류. 큰 텍스트는 파싱하지 않는다.
+    $oversize = Join-Path $trustDir 'huge.ini'
+    [IO.File]::WriteAllText($oversize, ('x' * 2097153))
+    Assert-True ($null -eq (Read-SafeText $oversize)) '2MiB 텍스트 상한'
+    Add-TestFile $trustDir 'line.ini' (('a' * 10000) + "`npost_max_size=8M")
+    $clipped = @(Read-SafeLines (Join-Path $trustDir 'line.ini'))
+    Assert-Eq $clipped[0].Length 4096 '정규식 입력 줄 4096자 상한'
+    if (-not $script:OnWindows) {
+        # 루트 밖 디렉터리 링크와 바이너리 링크는 모두 무시한다.
+        $fxLink = New-TmpDir
+        [void](New-Item -ItemType SymbolicLink -Path (Join-Path $fxLink 'php-link') -Target (Join-Path $outside 'external'))
+        $r = Invoke-QcJson $fxLink @('-Exec')
+        Assert-Eq $r.Code 0 '루트 밖 링크는 실행/읽기 제외'
+        if ($null -ne $r.Obj) {
+            Assert-Eq (Get-InstList $r.Obj).Count 0 '루트 밖 링크는 설치로 보고하지 않음'
+            Assert-True ((@($r.Obj.warnings) -join ' ') -match '링크/정션 무시') '루트 밖 링크 경고'
+        }
+        $linkOut = Join-Path $planDir 'plan-symlink.ps1'
+        [void](New-Item -ItemType SymbolicLink -Path $linkOut -Target (Join-Path $planDir 'absent-target'))
+        $r = Invoke-QcJson $fxOk @('-PlanFile', $linkOut)
+        Assert-Eq $r.Code 2 'dangling symlink PlanFile 거부'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $planDir 'absent-target'))) 'symlink 대상 파일을 생성하지 않음'
+        $fifo = Join-Path $trustDir 'fifo'
+        & /usr/bin/mkfifo $fifo
+        Assert-True (-not (Test-RegularFile $fifo)) 'FIFO 정규 파일 검사에서 제외'
+        Assert-True ($null -eq (Read-SafeText $fifo)) 'FIFO 읽지 않음'
+        # 환경은 최소화되며, stdout 대량 출력도 4096바이트 상한과 제한시간으로 처리.
+        $env:P2S_SECRET_TEST = 'must-not-leak'
+        $envExe = Join-Path $trustDir 'env.php.exe'
+        [IO.File]::WriteAllText($envExe, "#!/bin/sh`nif [ -n `"`${P2S_SECRET_TEST-}`" ]; then echo 'PHP 8.4.26'; else echo 'PHP 8.4.27'; fi`n")
+        & /bin/chmod 755 $envExe
+        Assert-Eq (Invoke-PhpVersion $envExe) 'PHP 8.4.27' '자식에게 비밀 환경변수 미전달'
+        $env:P2S_SECRET_TEST = $null
+        $noisyExe = Join-Path $trustDir 'noisy.php.exe'
+        [IO.File]::WriteAllText($noisyExe, "#!/bin/sh`necho 'PHP 8.4.27'; while :; do echo 'noise'; done`n")
+        & /bin/chmod 755 $noisyExe
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $noisyVersion = Invoke-PhpVersion $noisyExe
+        $watch.Stop()
+        Assert-True ($watch.Elapsed.TotalSeconds -lt 12) '대량 출력 자식은 제한시간 안에 종료'
+        Assert-True ($null -eq $noisyVersion -or $noisyVersion.Length -le 2048) 'stdout 반환 상한'
     }
 
     # -----------------------------------------------------------------------
@@ -612,6 +747,7 @@ try {
         Write-Output 'SKIP: 라이브 프로세스 테스트는 Linux + sleep 이 있을 때만 실행됩니다(실제 Windows 프로세스/서비스/레지스트리/IIS 동작은 이 하네스로 검증되지 않음).'
     }
 } finally {
+    $env:PHP2SHELL_TEST_VERSION_FILE = $script:PreviousTestVersionFlag
     foreach ($d in $script:TmpDirs) { try { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } catch { } }
 }
 

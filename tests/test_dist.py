@@ -72,11 +72,30 @@ class DistBundle(unittest.TestCase):
         self.assertNotIn(b"%TEMP%", header)
         self.assertNotIn(b"%RANDOM%", header)
 
-    @unittest.skipUnless(os.environ.get("P2S_TEST_PWSH") or shutil.which("pwsh"),
-                         "PowerShell 필요(Windows CI 또는 P2S_TEST_PWSH)")
-    def test_in_memory_launcher_command_and_argument_binding(self):
-        """실제 .bat의 -Command를 pwsh에서 실행: 임시 파일 없음, 값을 코드로 평가하지 않음."""
+    @staticmethod
+    def _powershell_host():
         host = os.environ.get("P2S_TEST_PWSH") or shutil.which("pwsh")
+        if not host and os.name == "nt":
+            candidate = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
+                                     "WindowsPowerShell", "v1.0", "powershell.exe")
+            if os.path.isfile(candidate):
+                host = candidate
+        return host
+
+    @staticmethod
+    def _run_host(host, command, env):
+        # 출력은 UTF-8 로 명시해 읽는다(Windows 시스템 코드 페이지 cp1252/cp949 로 해석하면 디코드 오류).
+        return subprocess.run([host, "-NoProfile", "-Command", command], env=env,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              encoding="utf-8", errors="replace", timeout=60)
+
+    @unittest.skipUnless(os.environ.get("P2S_TEST_PWSH") or shutil.which("pwsh") or os.name == "nt",
+                         "PowerShell 필요(pwsh, P2S_TEST_PWSH 또는 Windows PowerShell)")
+    def test_in_memory_launcher_command_and_argument_binding(self):
+        """실제 .bat의 -Command를 PowerShell에서 실행: 임시 파일 없음, 값을 코드로 평가하지 않음."""
+        host = self._powershell_host()
+        if not host:
+            self.skipTest("PowerShell 실행 파일을 찾을 수 없음")
         command = next(line for line in build_dist.BAT_HEADER.splitlines()
                        if line.startswith('"%P2S_HOST%"'))
         command = command.split(' -Command "', 1)[1][:-1].replace("%%", "%")
@@ -84,9 +103,7 @@ class DistBundle(unittest.TestCase):
         env = dict(os.environ, P2S_SELF=bat, P2S_NOPAUSE="1")
         env.pop("PHP2SHELL_TEST_VERSION_FILE", None)
         env["P2S_ARGS"] = "-Classify 8.4.26"
-        proc = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              universal_newlines=True, timeout=30)
+        proc = self._run_host(host, command, env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "vulnerable", proc.stderr)
         with tempfile.TemporaryDirectory(prefix="p2s launcher ") as root:
@@ -96,23 +113,18 @@ class DistBundle(unittest.TestCase):
                 handle.write(b"X-Powered-By: PHP/8.4.26\0")
             plan = os.path.join(root, "review plan.ps1")
             env["P2S_ARGS"] = '-Json -NoExec -Offline -Root "%s" -PlanFile "%s"' % (root, plan)
-            proc = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  universal_newlines=True, timeout=30)
+            proc = self._run_host(host, command, env)
             self.assertEqual(proc.returncode, 1, proc.stderr)
-            result = json.loads(proc.stdout)
+            self.assertTrue(proc.stdout, proc.stderr)
+            result = json.loads(proc.stdout.lstrip("\ufeff"))
             self.assertEqual(result["exit_code"], 1)
             self.assertEqual(result["plan_file"], plan)
             self.assertTrue(os.path.isfile(plan))
             env["P2S_ARGS"] = '-Json -NoExec -Root "%s" -PlanFile "%s"' % (root, plan)
-            again = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   universal_newlines=True, timeout=30)
+            again = self._run_host(host, command, env)
             self.assertEqual(again.returncode, 2, again.stderr)
         env["P2S_ARGS"] = "-Unknown"
-        bad = subprocess.run([host, "-NoProfile", "-Command", command], env=env,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             universal_newlines=True, timeout=30)
+        bad = self._run_host(host, command, env)
         self.assertEqual(bad.returncode, 2)
 
     @unittest.skipUnless(shutil.which("sh") and os.name == "posix", "POSIX sh 필요")

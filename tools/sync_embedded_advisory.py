@@ -33,7 +33,9 @@ def main(argv):
     raw = triage.read_bytes(TOOL, 2000000)
     if raw is None:
         raise SystemExit("소스를 읽을 수 없습니다.")
-    text = raw.decode("utf-8")
+    # Windows 체크아웃(autocrlf)은 CRLF 일 수 있다: 비교는 LF 로 정규화하고, 쓸 때 원래 줄바꿈을 유지한다.
+    crlf = "\r\n" in raw.decode("utf-8")
+    text = raw.decode("utf-8").replace("\r\n", "\n")
     head, rest = text.split(BEGIN, 1)
     _, tail = rest.split(END, 1)
     new = head + BEGIN + render() + END + tail
@@ -45,7 +47,7 @@ def main(argv):
     if "--force" not in argv:
         print("기존 소스 교체에는 --force가 필요합니다.", file=sys.stderr)
         return 2
-    triage.safe_write(TOOL, new, force=True, script=True)
+    triage.safe_write(TOOL, new.replace("\n", "\r\n") if crlf else new, force=True, script=True)
     return 0
 
 

@@ -316,8 +316,13 @@ if [ -e "$MARK" ]; then ok; else bad '--exec 강제 실행되지 않음'; fi
 
 # 신뢰 함수의 metadata seam: 실제 파일은 필요하지만 UID/모드는 주입 가능.
 awk '/^# BEGIN TRUST POLICY/ {p=1;next} /^# END TRUST POLICY/ {p=0} p' "$QC" > "$TMP/trust-functions.sh"
-TRUST_FILE=/bin/ls
-[ -f /bin/busybox ] && TRUST_FILE=/bin/busybox
+# 신뢰 predicate 는 심볼릭 링크 파일을 거부하므로(호출자가 해석한 경로를 넘김) 링크가 아닌 실제 파일을 고름.
+# openSUSE 처럼 /bin 이 /usr/bin 링크이고 /bin/ls 도 링크인 배포판이 있음.
+TRUST_FILE=""
+for cand in /usr/bin/ls /bin/ls /bin/busybox /usr/bin/cat /bin/cat /usr/bin/env /bin/sh; do
+  if [ -f "$cand" ] && [ ! -L "$cand" ]; then TRUST_FILE=$cand; break; fi
+done
+if [ -z "$TRUST_FILE" ]; then bad '신뢰 predicate 테스트용 실제 파일을 찾지 못함'; TRUST_FILE=/bin/ls; fi
 if (
   . "$TMP/trust-functions.sh"
   trust_metadata() { printf '%s 1 %s 0 1 Jan 1 00:00 target\n' "${TEST_MODE:--rwxr-xr-x}" "${TEST_UID:-0}"; }

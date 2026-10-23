@@ -12,7 +12,7 @@
 - 점검 도구는 Python 3.6+ 표준 라이브러리만 씁니다(의존성 추가 금지). 3.7+ 전용 문법·API(dataclass, `capture_output`, `fromisoformat` 등)를 쓰지 마세요.
 - `quickcheck/` 의 sh·PowerShell 스크립트는 Python 이 없는 서버용입니다. 판정 규칙은 `tests/vectors/versions.json` 의 공유 벡터로 세 구현이 같은 결과를 내야 합니다.
 - 테스트: `python3 -m unittest discover -s tests`, `sh tests/test_quickcheck_sh.sh`, PowerShell 은 `pwsh -File tests/test_quickcheck_ps1.ps1`. Docker 기반 플랫폼 점검은 `docs/testing.ko.md` 를 보세요.
-- 권고 데이터를 바꾸면 `python3 tools/sync_embedded_advisory.py` 로 내장본을 맞춥니다.
+- 권고 데이터를 바꾸면 `python3 tools/sync_embedded_advisory.py --force` 로 내장본을 맞춥니다(기존 파일 교체는 `--force` 가 필요합니다).
 
 ## 보안 문제
 [SECURITY.md](SECURITY.md) 를 따르세요. 공개 이슈에 위험한 재현 정보를 올리지 마세요.

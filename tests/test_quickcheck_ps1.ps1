@@ -141,6 +141,24 @@ function Test-PlanFile {
     Assert-True ($y.Text.Contains('KISA 118')) ($Label + ': 0단계 증거 보존 안내 출력')
 }
 
+function Resolve-RealPath {
+    # 경로의 모든 구성요소에서 심볼릭 링크를 풀어 실제 경로를 돌려준다(Windows 에서는 그대로 반환).
+    param([string]$Path)
+    if ($script:OnWindows) { return $Path }
+    $full = [IO.Path]::GetFullPath($Path)
+    $current = [IO.Path]::GetPathRoot($full)
+    foreach ($part in ($full.Substring($current.Length) -split '/')) {
+        if (-not $part) { continue }
+        $current = [IO.Path]::Combine($current, $part)
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            $resolved = $item.ResolveLinkTarget($true)
+            if ($null -ne $resolved) { $current = $resolved.FullName }
+        }
+    }
+    return $current
+}
+
 function Test-NoteMatch {
     param($Inst, [string]$Pattern)
     foreach ($n in @($Inst.notes)) { if ([string]$n -match $Pattern) { return $true } }
@@ -587,7 +605,9 @@ try {
     }
 
     # ACL 정책은 가짜 SID/ACE reader를 사용해 플랫폼 독립적으로 검증한다.
-    $trustDir = New-TmpDir
+    # macOS 의 임시 디렉터리는 /var/folders -> /private/var 심볼릭 링크 아래에 있다. Test-TrustedPath 는 링크(ReparsePoint)가 낀
+    # 경로를 의도적으로 거부하므로(Windows 정션도 동일), 이 테스트는 링크를 모두 푼 실제 경로에서 수행한다.
+    $trustDir = Resolve-RealPath (New-TmpDir)
     Add-TestFile $trustDir 'php.exe' ''
     $trustFile = Join-Path $trustDir 'php.exe'
     $script:RootDir = ''

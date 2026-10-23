@@ -51,6 +51,18 @@ class VersionVectors(unittest.TestCase):
         code = subprocess.call([sys.executable, os.path.join(ROOT, "tools", "sync_embedded_advisory.py"), "--check"])
         self.assertEqual(code, 0)
 
+    def test_sync_check_accepts_crlf_checkout(self):
+        # Windows autocrlf 체크아웃을 흉내: 소스와 권고 데이터를 CRLF 로 복사해 --check 가 통과해야 한다.
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in ("php2shell_triage.py", os.path.join("tools", "sync_embedded_advisory.py"), os.path.join("data", "advisory.json")):
+                os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
+                with open(os.path.join(ROOT, rel), "rb") as handle:
+                    data = handle.read().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+                with open(os.path.join(tmp, rel), "wb") as handle:
+                    handle.write(data)
+            code = subprocess.call([sys.executable, os.path.join(tmp, "tools", "sync_embedded_advisory.py"), "--check"])
+            self.assertEqual(code, 0)
+
     def test_verdict_depends_on_vendor_evidence_only_for_affected_classes(self):
         self.assertEqual(triage.verdict_for("fixed", "no"), "fixed")
         self.assertEqual(triage.verdict_for("vulnerable", "yes"), "vendor_patched")
@@ -502,11 +514,14 @@ class SecurityRegression(unittest.TestCase):
                 "print(os.environ.get('PYTHONPATH','ABSENT')); print(repr(sys.stdin.read())); "
                 "print(os.environ.get('LC_ALL','')); print(os.environ['PATH'])"])
         self.assertEqual(code, 0)
+        output = output.replace("\r\n", "\n")  # Windows 자식 프로세스의 print 는 CRLF
         self.assertIn("ABSENT\nABSENT\n''", output)
         self.assertNotIn("do-not-leak", output)
         if os.name != "nt":
             self.assertIn(triage.SAFE_PATH, output)
             self.assertIn("\nC\n", output)
+        else:
+            self.assertEqual(output.splitlines()[-1], os.path.join(triage.windows_systemroot(), "System32"))
         _, output = triage.run([sys.executable, "-c", "import sys; sys.stdout.write('x'*1000000)"])
         self.assertEqual(len(output.encode("utf-8")), 4096)
         code, _ = triage.run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.1)

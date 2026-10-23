@@ -38,6 +38,17 @@ function Wait-Post([string]$Url, [scriptblock]$MakeContent, [int]$Expected, [int
     Write-Host ("  status {0} after {1:N1}s (expected {2})" -f $code, $watch.Elapsed.TotalSeconds, $Expected)
     return $code
 }
+# IIS applies handler/config changes asynchronously: the first request right after `appcmd` or `iisreset /start` can still be a static-file 404.17
+function Get-PhpPage([string]$Url, [int]$Seconds = 40) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $last = ''
+    do {
+        try { return (Invoke-WebRequest $Url -UseBasicParsing).Content } catch { $last = $_.Exception.Message }
+        Start-Sleep -Seconds 2
+    } while ($watch.Elapsed.TotalSeconds -lt $Seconds)
+    Write-Host "  no PHP response from $Url after $Seconds s: $last"
+    return ''
+}
 function Multipart-Content {
     $c = New-Object System.Net.Http.MultipartFormDataContent
     $c.Add((New-Object System.Net.Http.StringContent('a')), 'f')
@@ -111,7 +122,7 @@ if (Test-Path $phpCgi) {
     & $appcmd set config /section:system.webServer/fastCgi "/+[fullPath='$phpCgi']" | Out-Null
     & $appcmd set config /section:system.webServer/handlers "/+[name='PHP_via_FastCGI',path='*.php',verb='*',modules='FastCgiModule',scriptProcessor='$phpCgi',resourceType='Either']" | Out-Null
     Set-Content (Join-Path $wwwroot 'v.php') '<?php echo "php-", PHP_VERSION;'
-    $body = (Invoke-WebRequest 'http://localhost/v.php' -UseBasicParsing).Content
+    $body = Get-PhpPage 'http://localhost/v.php'
     Check ($body -like 'php-8.4.*') "IIS serves PHP through FastCGI ($body)"
     $before = Get-Process php-cgi -ErrorAction SilentlyContinue | Select-Object -First 1
     Check ($null -ne $before) 'php-cgi.exe is running under IIS'
@@ -137,7 +148,7 @@ if (Test-Path $phpCgi) {
     Check (-not (Get-Process php-cgi, w3wp -ErrorAction SilentlyContinue)) 'no php-cgi/w3wp left after iisreset /stop'
     & "$env:SystemRoot\System32\iisreset.exe" /start | Out-Null
     Check ($LASTEXITCODE -eq 0) 'iisreset /start succeeded'
-    $body2 = (Invoke-WebRequest 'http://localhost/v.php' -UseBasicParsing).Content
+    $body2 = Get-PhpPage 'http://localhost/v.php'
     $after = Get-Process php-cgi -ErrorAction SilentlyContinue | Select-Object -First 1
     Check ($null -ne $after -and $after.StartTime -gt $startBefore) "php-cgi restarted with a newer StartTime ($body2)"
 } else {

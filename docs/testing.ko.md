@@ -55,3 +55,19 @@ python3 php2shell_triage.py --root ./rootfs            # 또는 sh php2shell-qui
 python3 tools/build_dist.py            # dist/php2shell-triage-<버전>/ 와 .zip/.tar.gz, SHA256SUMS
 ```
 `php2shell-quickcheck.bat` 는 PowerShell 스크립트를 내장한 단일 파일입니다(헤더는 ASCII). 환경 변수 `P2S_NOPAUSE=1` 이면 더블클릭 모드의 `pause` 를 건너뜁니다.
+
+## 6. 실제 환경이 있어야 하는 확장 검증
+컨테이너로는 할 수 없는 항목은 `tests/*_check.sh` 와 `.github/workflows/extended.yml` 로 실제 환경에서 실행합니다. 각 스크립트는 머리말에 무엇을 확인하는지 적혀 있고, 끝나면 `PASS`/`FAIL` 줄과 종료 코드를 냅니다. **임시 VM·CI 러너 전용**인 것은 호스트에 패키지를 설치하거나 방화벽 규칙을 잠시 적용합니다.
+
+| 스크립트 | 환경 | 확인하는 것 |
+| --- | --- | --- |
+| `tests/compose_socket_check.sh` | Docker + compose | `cap_drop: ALL` 에서 unix 소켓 listen 에 `CHOWN` 이 필요한지 |
+| `tests/gpg_source_check.sh` | curl, gpg, git | tarball 서명, 변조 탐지, 백포트 브랜치 커밋 서명 (임시 GNUPGHOME 사용) |
+| `tests/backport_build_check.sh 7.4 8.0 8.1` | Docker, git | 백포트 브랜치 최소 구성 빌드와 실행 |
+| `tests/k8s_check.sh` | kubectl + 클러스터(kind 등) | jsonpath 이미지 목록, `rollout status`, 파드 안 점검 |
+| `tests/brew_check.sh` | macOS + Homebrew | Homebrew PHP 탐지, `brew info`, `brew services start` |
+| `sudo sh tests/linux_host_check.sh` | systemd 호스트(임시 VM) | systemd drop-in, 재시작 필요 탐지, auditd, nftables |
+| `sudo sh tests/freebsd_check.sh` | FreeBSD(임시 VM) | pkg 설치 PHP 탐지, `pkg audit`, `service php_fpm` |
+| `tests/windows_acl_check.py`, `tests/windows_iis_check.ps1` | 관리자 권한 Windows(임시) | 실제 ACL 신뢰 판정, IIS `web.config`·FastCGI·`iisreset`, 패치 계획 증거 단계, cp949 콘솔 출력 |
+
+`tests/_inspect_json.py` 는 이 스크립트들이 점검 도구의 JSON(Python·sh 공통)을 검사하는 도우미입니다. 결과와 한계는 [verification.ko.md](verification.ko.md) 를 보세요.

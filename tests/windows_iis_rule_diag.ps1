@@ -22,8 +22,8 @@ function Post-Multipart {
     $client.Dispose()
     return @{ Status = [int]$response.StatusCode; Location = $location }
 }
-function Try-Rule([string]$Name, [string]$Source, [string]$Pattern, [string]$Action) {
-    $xml = '<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer><rewrite><rules><rule name="d" stopProcessing="true"><match url=".*" /><conditions><add input="' + $Source + '" pattern="' + $Pattern + '" /></conditions>' + $Action + '</rule></rules></rewrite></system.webServer></configuration>'
+function Try-Rule([string]$Name, [string]$Source, [string]$Pattern, [string]$Action, [string]$Extra = '') {
+    $xml = '<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer><rewrite><rules><rule name="d" stopProcessing="true"><match url=".*" /><conditions><add input="' + $Source + '" pattern="' + $Pattern + '"' + $Extra + ' /></conditions>' + $Action + '</rule></rules></rewrite></system.webServer></configuration>'
     Set-Content $webConfig $xml -Encoding UTF8
     $r = Post-Multipart
     Write-Host ("RESULT {0,-34} status={1} location={2}" -f $Name, $r.Status, $r.Location)
@@ -36,6 +36,11 @@ Try-Rule 'CONTENT_TYPE any'             '{CONTENT_TYPE}'       '.+'        $bloc
 Try-Rule 'HTTP_CONTENT_TYPE multipart'  '{HTTP_CONTENT_TYPE}'  'multipart' $block
 Try-Rule 'CONTENT_TYPE multipart'       '{CONTENT_TYPE}'       'multipart' $block
 Try-Rule 'CONTENT_TYPE anchored'        '{CONTENT_TYPE}'       '^multipart/form-data' $block
+Try-Rule 'shipped pattern HTTP_'          '{HTTP_CONTENT_TYPE}'  '^\s*multipart/form-data' $block ' ignoreCase="true"'
+Try-Rule 'shipped pattern CT'             '{CONTENT_TYPE}'       '^\s*multipart/form-data' $block ' ignoreCase="true"'
+Try-Rule 'shipped pattern, no ignoreCase' '{HTTP_CONTENT_TYPE}'  '^\s*multipart/form-data' $block
+Try-Rule 'space class'                    '{HTTP_CONTENT_TYPE}'  '^ *multipart/form-data' $block ' ignoreCase="true"'
+Try-Rule 'anchored + ignoreCase'          '{HTTP_CONTENT_TYPE}'  '^multipart/form-data' $block ' ignoreCase="true"'
 $redirect = '<action type="Redirect" url="http://localhost/seen?v={C:1}" appendQueryString="false" redirectType="Temporary" />'
 Try-Rule 'echo ALL_RAW'                 '{ALL_RAW}'            '(.*)'      $redirect
 Try-Rule 'echo CONTENT_TYPE'            '{CONTENT_TYPE}'       '(.*)'      $redirect

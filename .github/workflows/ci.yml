@@ -122,6 +122,7 @@ jobs:
           if ($vuln.Count -lt 1) { throw "vulnerable build was not detected" }
           if ($fixed.Count -lt 1) { throw "fixed build was not detected" }
           if ($code -ne 1) { throw "expected exit code 1, got $code" }
+          exit 0   # 마지막 네이티브 명령(.bat)의 종료 코드 1이 step 결과가 되지 않도록
       - name: python tool agrees
         shell: pwsh
         run: |
@@ -140,6 +141,7 @@ jobs:
           $env:PHP2SHELL_I_REVIEWED = ""
           & pwsh -NoProfile -File plan\patch-plan.ps1
           if ($LASTEXITCODE -ne 64) { throw "guard did not stop the plan (exit $LASTEXITCODE)" }
+          exit 0
 
   dist:
     name: dist bundle
@@ -151,7 +153,7 @@ jobs:
           python-version: "3.13"
       - run: python tools/build_dist.py --out dist
       - name: verify checksums
-        run: cd dist/php2shell-triage-* && sha256sum -c SHA256SUMS
+        run: cd dist/php2shell-triage-*/ && sha256sum -c SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: dist

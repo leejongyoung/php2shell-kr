@@ -52,6 +52,14 @@ exit /b %P2S_RC%
 """
 
 
+def display(path):
+    """저장소 기준 상대 경로. 드라이브가 다른 Windows 경로(임시 폴더 등)에서는 절대 경로를 그대로 쓴다."""
+    try:
+        return os.path.relpath(path, ROOT)
+    except ValueError:
+        return path
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -126,8 +134,8 @@ def main(argv=None):
     with tarfile.open(tar_path, "w:gz") as archive:
         archive.add(target, arcname=name)
     for archive_path in (zip_path, tar_path):
-        print("%s  %s" % (sha256(archive_path), os.path.relpath(archive_path, ROOT)))
-    print("dist: %s" % os.path.relpath(target, ROOT))
+        print("%s  %s" % (sha256(archive_path), display(archive_path)))
+    print("dist: %s" % display(target))
     return 0
 
 

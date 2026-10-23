@@ -115,7 +115,7 @@ for f in php*.deb; do
     | zcat 2>/dev/null | grep -m1 -E 'CVE-2026-10961[89]' && echo "  <- $f"
 done
 ```
-검증 결과(debian:12): `Fix CVE-2026-109618 and CVE-2026-109619: State corruption via bailout.  <- php8.2-common_8.2.35-1~deb12u1_arm64.deb`. 변경 이력은 `php8.2-common` 패키지에 들어 있고 `php8.2-cli`, `php8.2-fpm`은 같은 문서를 가리킬 수 있으므로, 아무 줄도 안 나오면 `php*-common` 패키지가 목록에 있는지부터 확인하세요. **아무것도 안 나오면 이 묶음은 수정본이 아니거나 변경 이력이 다른 패키지에 있는 것이므로 설치하지 마세요.**
+검증 결과(debian:12): `Fix CVE-2026-109618 and CVE-2026-109619: State corruption via bailout.  <- php8.2-common_8.2.35-1~deb12u1_arm64.deb`. 같은 방식으로 `php8.2-fpm_*.deb`를 열었을 때는 변경 이력 파일이 들어 있지 않았고 `php8.2-common_*.deb`에 있었습니다. 대상 서버에 `php8.2-common`이 이미 같은 버전으로 설치되어 있으면 다운로드 목록에서 빠지므로, 그 경우에는 연결된 구역에서 `apt-get download php8.2-common`으로 따로 받아 확인하세요. **아무것도 안 나오면 이 묶음은 수정본이 아니거나 변경 이력이 다른 패키지에 있는 것이므로 설치하지 마세요.**
 
 ### 5.4 대상 서버로 복사 후 설치
 ```bash
@@ -331,7 +331,7 @@ gpg --verify php-8.4.27.tar.xz.asc php-8.4.27.tar.xz
 위 `gpg` 절차는 이 저장소에서 실행하지 못했습니다(미검증). 서명 파일 이름은 다운로드 페이지의 링크를 따르세요.
 - 백포트 브랜치(Git)는 릴리스 tarball이 아닙니다. 연결된 PC에서 클론하고 `git log -1 --format=%H`의 커밋 해시를 독립 채널의 GitHub 웹 화면과 대조한 뒤, `git archive`나 디렉터리 전체의 `tar`로 묶어 해시를 만들어 옮깁니다.
   - 브랜치 주소: 7.4 `https://github.com/php/php-src/tree/PHP-7.4-CVE-2026-109618-109619`, 8.0 `.../tree/PHP-8.0-CVE-2026-109618-109619`, 8.1 `.../tree/PHP-8.1-CVE-2026-109618-109619` (PHP 공지).
-  - 커밋이 서명되었는지는 확인하지 않았습니다.
+  - 8.1 브랜치 끝 커밋(`1d7dec17...`)은 GPG 서명이 있었으나(EDDSA 키 `259299AD4C7E1F40DE1302FF115CEA7A713E12E9`) 작업 환경에 공개 키가 없어 서명을 검증하지 못했습니다. 서명 키 지문도 독립 채널에서 확인하세요. 7.4, 8.0 브랜치의 서명은 확인하지 않았습니다.
 
 ### 11.2 오프라인 빌드 의존성
 빌드 도구와 개발 헤더도 오프라인으로 옮겨야 합니다. 같은 방법으로 목록·해시를 만들고 같은 절차로 설치하세요. 검증된 최소 구성(debian:12: `git build-essential autoconf bison re2c pkg-config libxml2-dev libsqlite3-dev` 설치 후 `./buildconf --force`, `./configure --disable-all --enable-cli --enable-fpm`, `make`)의 결과는 [`response-options.ko.md`](response-options.ko.md) 8절을 보세요. 실제 운영 빌드는 쓰는 확장(openssl, curl, zlib, mbstring 등)의 개발 패키지가 더 필요하며, 필요한 목록은 현재 빌드의 `php -i | grep 'Configure Command'`로 알 수 있습니다.
@@ -346,10 +346,10 @@ apt-get --print-uris -y install build-essential autoconf bison re2c pkg-config l
 
 | 순서 | 확인 | 방법 |
 |---|---|---|
-| 1 | 설치된 패키지가 수정본이다 | `zcat /usr/share/doc/php8.2-common/changelog.Debian.gz | grep -E 'CVE-2026-10961[89]'`, `rpm -q --changelog php-fpm | grep -E 'CVE-2026-10961[89]'`, Alpine은 버전(`8.4.27-r0` 이상) |
+| 1 | 설치된 패키지가 수정본이다 | `zcat /usr/share/doc/php8.2-common/changelog.Debian.gz \| grep -E 'CVE-2026-10961[89]'`, `rpm -q --changelog php-fpm \| grep -E 'CVE-2026-10961[89]'`, Alpine은 버전(`8.4.27-r0` 이상) |
 | 2 | 설정 파일이 의도대로다 | 백업과 `diff`, `php-fpm8.2 -t`(PHP-FPM 설정 시험: debian:12에서 `test is successful` 확인), `apache2ctl configtest`, `nginx -t` |
 | 3 | **웹 SAPI를 재시작했다** | `systemctl restart php8.2-fpm` / `apache2` / `httpd` 등 (KISA 수칙 2: 재시작하지 않으면 옛 버전이 계속 동작) |
-| 4 | 프로세스가 새 바이너리다 | `ls -l /proc/[0-9]*/exe | grep deleted`, `grep -l 'libphp.*(deleted)' /proc/[0-9]*/maps`, SUSE는 `zypper ps`, 프로세스 시작 시각 |
+| 4 | 프로세스가 새 바이너리다 | `ls -l /proc/[0-9]*/exe \| grep deleted`, `grep -l 'libphp.*(deleted)' /proc/[0-9]*/maps`, SUSE는 `zypper ps`, 프로세스 시작 시각 |
 | 5 | 웹 SAPI의 버전·설정 | CLI의 `php -v`는 증거가 아님. 웹 SAPI 바이너리의 `-v`, 임시 확인 페이지(확인 후 삭제) |
 | 6 | 서비스 정상 | 헬스체크, 로그인·업로드·세션 기능 시험, 에러 로그 |
 | 7 | 다른 PHP가 남아 있지 않다 | 한 서버에 PHP가 여러 개면 각각(KISA 수칙 2) |

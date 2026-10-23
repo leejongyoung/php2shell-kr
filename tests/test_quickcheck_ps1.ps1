@@ -72,8 +72,10 @@ function Invoke-Qc {
     if ($script:OnWindows) { $a.Add('-ExecutionPolicy'); $a.Add('Bypass') }
     $a.Add('-File'); $a.Add($script:QcPath)
     foreach ($x in $QcArgs) { $a.Add($x) }
-    $out = & $script:HostExe @($a.ToArray()) 2>$null
-    $code = $LASTEXITCODE
+    # Windows PowerShell 5.1 은 $ErrorActionPreference='Stop' 일 때 네이티브 stderr 를 예외로 바꾼다 (2>$null 이어도). 호출 동안만 Continue.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $out = & $script:HostExe @($a.ToArray()) 2>$null; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $prevEap }
     return [pscustomobject]@{ Code = [int]$code; Text = (@($out) -join "`n") }
 }
 
@@ -181,8 +183,8 @@ try {
     . $script:QcPath
     if ($script:OnWindows) { try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { } }
 
-    $vec = Get-Content -LiteralPath $script:VecPath -Raw | ConvertFrom-Json
-    $adv = Get-Content -LiteralPath $script:AdvPath -Raw | ConvertFrom-Json
+    $vec = [System.IO.File]::ReadAllText($script:VecPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $adv = [System.IO.File]::ReadAllText($script:AdvPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $caseCount = 0
     foreach ($c in @($vec.cases)) {
         $caseCount++

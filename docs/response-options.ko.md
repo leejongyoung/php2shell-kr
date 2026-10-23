@@ -117,7 +117,7 @@ find / -xdev \( -name 'php-fpm*' -o -name 'php-cgi*' -o -name 'libphp*.so' -o -n
 3. **웹 서비스 재시작** (PHP-FPM, Apache, LiteSpeed, FrankenPHP 등). 재시작하지 않으면 메모리에 남은 이전 버전이 계속 동작합니다(KISA 수칙 2).
 4. 6절의 방법으로 패치를 증명.
 
-**장점**: 빠름, 벤더 지원 유지, 의존성 자동 해결. **단점**: 배포판이 아직 패키지를 내지 않았을 수 있음(실제로 이 문서 검증 시점에 Alpine 3.20 저장소는 php83 8.3.15, openSUSE Leap 15.6은 8.2.30으로 CVE 항목이 없었음. 8절 참고). 호환성 문제 가능성(KISA 개요의 "사전 영향도 검토 및 테스트" 권고).
+**장점**: 빠름, 벤더 지원 유지, 의존성 자동 해결. **단점**: 배포판이 아직 패키지를 내지 않았을 수 있음(실제로 이 문서 검증 시점에 Alpine 3.20 저장소는 php83 8.3.15, openSUSE Leap 15.6은 8.2.30으로 CVE 항목이 없었음. 5절, 8절 참고). 호환성 문제 가능성(KISA 개요의 "사전 영향도 검토 및 테스트" 권고).
 
 **검증**: 6절.
 
@@ -183,7 +183,7 @@ git log -1 --format='%H %an %ad %s'      # 커밋 해시를 기록하고 독립 
 make -j"$(nproc)" && make test            # 테스트 결과는 반드시 검토
 sudo make install
 ```
-- 검증 환경(debian:12, aarch64): 위 클론~`buildconf`~`configure --disable-all --enable-cli --enable-fpm`~`make`는 8절의 결과를 참고하세요. 확장(extension)이 많은 실제 운영 빌드는 검증하지 않았습니다(미검증).
+- 검증 환경(debian:12, aarch64): 위 클론~`buildconf`~`configure --disable-all --enable-cli --enable-fpm`~`make`는 이 문서 8절 "소스 빌드 검증"에 결과를 적었습니다. 확장(extension)이 많은 실제 운영 빌드는 검증하지 않았습니다(미검증).
 - 설치 후 PHP-FPM/Apache가 새 바이너리·모듈을 가리키도록 서비스 단위 파일 또는 모듈 경로를 수정하고 **재시작**.
 - 공식 tarball을 쓸 때의 무결성 확인은 [`offline-patching.ko.md`](offline-patching.ko.md)의 "소스 tarball" 절 참고.
 
@@ -315,7 +315,7 @@ dnf module list php                    # 모듈 스트림 사용 시 현재 스�
 sudo apk update            # root라면 apk update
 apk upgrade -U $(apk info | grep '^php')     # 설치된 php 계열만. 모두 업그레이드하려면 apk upgrade
 ```
-- [검증] alpine:3.22에서 `apk fetch`/`apk add` 흐름은 확인(오프라인 문서 참고). 위 `apk upgrade -U $(apk info | grep '^php')` 형태는 8절의 최종 검증 결과를 따릅니다.
+- [검증] alpine:3.22에서 `apk fetch`/`apk add`(오프라인 문서 참고)와 `apk upgrade -U $(apk info | grep '^php')`(php84, php84-common이 설치된 이미지에서 문법 오류 없이 동작)를 확인했습니다. `apk info`는 `php84-cli`가 아니라 `php84`처럼 패키지 이름이 다를 수 있으니 출력을 확인하세요.
 - 중요: 검증 시점의 **Alpine 3.20 저장소에는 php83 8.3.15-r0만 있었고 수정 버전이 없었습니다.** 3.22에는 php82 8.2.35-r0, php83 8.3.36-r0, php84 8.4.27-r0이 있었고, 3.23에는 php83 8.3.36-r0, php84 8.4.27-r0, php85 8.5.12-r0이 있었습니다. 수정이 없는 릴리스는 저장소 업데이트로 해결되지 않으므로 OS 릴리스 업그레이드(또는 옵션 C/D/I)를 고려하세요.
 - Alpine에는 패키지 변경 이력 명령이 없으므로 업스트림 버전·릴리스 번호(예: `8.4.27-r0`)로 판단합니다.
 - 재시작(OpenRC): `rc-service php-fpm84 restart` 등 [미검증].
@@ -327,7 +327,7 @@ sudo zypper update 'php*'
 sudo zypper list-patches --cve=CVE-2026-109618     # 이 CVE를 고치는 패치가 있는지
 sudo zypper ps                                     # 업그레이드 후에도 옛 파일을 쓰고 있는 프로세스
 ```
-- [검증] registry.opensuse.org/opensuse/leap:15.6에서 `zypper list-patches --cve=CVE-2026-109618`이 "No matching issues found."를 반환(그 시점 패치 없음), `zypper ps`가 존재함을 확인. `zypper update 'php*'` 문법은 8절 참고.
+- [검증] registry.opensuse.org/opensuse/leap:15.6에서 `zypper list-patches --cve=CVE-2026-109618`이 "No matching issues found."를 반환(그 시점 패치 없음), `zypper ps`가 존재함을 확인, `zypper -n update 'php*'`가 문법 오류 없이 동작("No update candidate ... highest available version is already installed").
 - 재시작: `sudo systemctl restart php-fpm`, `sudo systemctl restart apache2` [미검증].
 
 ### FreeBSD (pkg)
@@ -363,7 +363,7 @@ Copy-Item C:\php\php.ini .\php-8.4.27\php.ini
 Rename-Item C:\php php-old
 Rename-Item .\php-8.4.27 php        # 같은 상위 폴더에서
 ```
-- [검증] `Get-FileHash`, `Expand-Archive`, `Copy-Item`, `Rename-Item` 문법을 mcr.microsoft.com/powershell(Linux)에서 임의 zip으로 확인. 실제 Windows·IIS·서비스 중지/시작은 [미검증].
+- [미검증] 위 PowerShell 명령과 Windows·IIS 동작은 이 저장소에서 실행하지 못했습니다(PowerShell 컨테이너가 에뮬레이션에서 비정상 종료). 문법과 동작은 실제 Windows에서 먼저 시험하세요.
 - 옛 폴더(`php-old`)는 취약하므로 확인이 끝나면 접근 불가능한 곳으로 옮기거나 삭제하고 PATH·핸들러 매핑이 새 폴더를 가리키는지 확인.
 - PHP가 포함된 Windows용 설치 패키지(제품에 내장된 PHP)는 직접 교체하지 말고 공급사에 확인(옵션 E).
 
@@ -383,7 +383,7 @@ docker pull php:8.4.27-fpm          # 출력의 "Digest: sha256:..."를 기록�
 
 ### 6.1 패키지 변경 이력에 CVE가 있다 (검증한 명령)
 ```bash
-# Debian / Ubuntu (패키지 이름은 설치된 것에 맞춤: php8.2-common, php8.3-common 등. doc 디렉터리는 common으로 연결됨)
+# Debian / Ubuntu (패키지 이름은 설치된 것에 맞춤: php8.2-cli, php8.3-cli 등. 변경 이력 파일이 없는 패키지가 있을 수 있으니 php*-common도 확인)
 zcat /usr/share/doc/php8.2-cli/changelog.Debian.gz | grep -E 'CVE-2026-10961[89]'
 
 # RHEL 계열, SUSE
@@ -394,8 +394,8 @@ rpm -q --changelog php8-fpm | grep -E 'CVE-2026-10961[89]'      # SUSE 패키지
 # 설치하지 않은 .rpm 파일에서
 rpm -qp --changelog ./php-fpm-*.rpm | grep -E 'CVE-2026-10961[89]'
 ```
-- [검증] debian:12에서 `php8.2 8.2.35-1~deb12u1` 변경 이력에 "Fix CVE-2026-109618 and CVE-2026-109619: State corruption via bailout."이 있음. ubuntu:24.04에서 `php -v`는 `8.3.6`이지만 `php8.3 (8.3.6-0ubuntu0.24.04.13)` 변경 이력에 두 CVE가 있음(**버전 번호만 보면 오판**하는 사례). rockylinux:9의 `php-cli-8.0.30-8.el9_8.1`(8.0 브랜치)과 `php-fpm`(모듈 스트림 8.3.36-1)에서도 `rpm -q --changelog`에 CVE가 있음. openSUSE Leap 15.6의 `php8-fpm-8.2.30-150600.3.25.1`에는 CVE 항목이 없었음(그 시점 미수정).
-- `grep`에 아무것도 나오지 않으면 **그 패키지에는 수정이 없다**는 뜻입니다. 나오면 해당 패키지 변경 이력에 기재됐다는 뜻이며, 이후 6.2, 6.3을 반드시 함께 확인하세요.
+- [검증] debian:12에서 `php8.2 8.2.35-1~deb12u1` 변경 이력에 "Fix CVE-2026-109618 and CVE-2026-109619: State corruption via bailout."이 있음. ubuntu:24.04에서 `php -v`는 `8.3.6`이지만 `php8.3 (8.3.6-0ubuntu0.24.04.13)` 변경 이력에 두 CVE가 있음(**버전 번호만 보면 오판**하는 사례). rockylinux:9의 `php-cli-8.0.30-8.el9_8.1`(8.0 브랜치)과 그 `php-fpm` 패키지 파일의 `rpm -qp --changelog`에도 CVE가 있음. openSUSE Leap 15.6의 `php8-fpm-8.2.30-150600.3.25.1`에는 CVE 항목이 없었음(그 시점 미수정).
+- `grep`에 아무것도 나오지 않으면 **그 패키지의 변경 이력에 CVE 기재가 없다**는 뜻입니다(수정 전이거나 변경 이력이 다른 서브 패키지에 있는 경우). 나오면 해당 패키지 변경 이력에 기재됐다는 뜻이며, 이후 6.2, 6.3을 반드시 함께 확인하세요.
 - 패키지에 따라 변경 이력이 어느 서브 패키지에 있는지 다릅니다. SAPI 패키지(`php-fpm`, `libapache2-mod-php`)와 `php-common`/`php-cli` 둘 다 확인하세요.
 
 ### 6.2 실행 중인 프로세스가 새 바이너리다 (재시작됨)
@@ -444,13 +444,20 @@ docker exec CONTAINER sh -c 'php-fpm -v || apache2ctl -v'  # 웹 SAPI 바이너�
 |---|---|---|
 | `docker manifest inspect php:<태그>` | Docker Hub / mirror.gcr.io | 5절·옵션 C의 태그 존재 확인 |
 | `apt-get install --only-upgrade $(dpkg-query ...)` 모의 실행(`-s`) | debian:12 | 문법 정상 (이미 최신이면 `0 upgraded`) |
-| `zcat .../changelog.Debian.gz | grep` | debian:12, ubuntu:24.04 | CVE 확인 |
-| `dnf check-update 'php*'`, `dnf upgrade --refresh 'php*'`, `dnf module list php`, `rpm -q --changelog | grep` | rockylinux:9 | 동작 |
+| `zcat .../changelog.Debian.gz \| grep` | debian:12, ubuntu:24.04 | CVE 확인 |
+| `dnf check-update 'php*'`, `dnf upgrade --refresh 'php*'`, `dnf module list php`, `rpm -q --changelog \| grep` | rockylinux:9 | 동작 |
 | `zypper list-patches --cve=`, `zypper ps` | registry.opensuse.org/opensuse/leap:15.6 | 동작 (패치 없음 응답) |
 | `apk fetch -R`, `apk add`, `apk verify` | alpine:3.22 | 동작([`offline-patching.ko.md`](offline-patching.ko.md)) |
 | `ls -l /proc/PID/exe`, `libphp` 맵 점검, `find ... php-fpm*`, `apache2ctl -M`, `nginx -t`, `apache2ctl configtest` | debian:12 | 동작 |
-| PowerShell `Get-FileHash`, `Expand-Archive`, `Copy-Item`, `Rename-Item` | mcr.microsoft.com/powershell | 동작(Linux pwsh에서, Windows 실제 시험 아님) |
-| 7.4/8.0/8.1 백포트 브랜치 클론·빌드 | debian:12 | 아래 "소스 빌드 검증" 항목 참고 |
+| PowerShell `Get-FileHash`, `Expand-Archive` 등 Windows 절차 | mcr.microsoft.com/powershell | **실행하지 못함(미검증)**: aarch64 호스트에서 에뮬레이션 중 PowerShell이 비정상 종료 |
+| 7.4/8.0/8.1 백포트 브랜치 클론·빌드 | debian:12 | 아래 "소스 빌드 검증" 참고 |
 | FreeBSD pkg, Homebrew, Windows 실제 교체, Kubernetes, Docker Compose, systemd 재시작, auditd, `dnf needs-restarting` 동작 | - | 미검증 |
 
-[SRC_BUILD_PLACEHOLDER]
+### 소스 빌드 검증 (옵션 D)
+
+debian:12(aarch64)에서 `git ls-remote`로 세 백포트 브랜치가 존재함을 확인했습니다(`PHP-7.4-...`, `PHP-8.0-...`, `PHP-8.1-...` + `-CVE-2026-109618-109619`). 8.1 브랜치를 `git clone --depth 1`로 받아 다음을 실행해 모두 성공했습니다.
+
+- 브랜치 끝 커밋: `1d7dec178a094e6e75b229ce22754045f8c6070a` "Avoid state corruption via bailout"(작성자 Arnaud Le Blanc, 2026-10-18). `git log --show-signature`는 서명이 있음(EDDSA 키 `259299AD4C7E1F40DE1302FF115CEA7A713E12E9`)을 보였지만 공개 키가 없어 **서명을 검증하지는 못했습니다.** 커밋 해시와 서명 키 지문은 독립 채널에서 확인하세요.
+- `main/php_version.h`의 `PHP_VERSION`은 `8.1.34`.
+- 설치한 의존성: `git build-essential autoconf bison re2c pkg-config libxml2-dev libsqlite3-dev ca-certificates`. `./buildconf --force`, `./configure --disable-all --enable-cli --enable-fpm --prefix=/opt/php81`, `make -j4` 성공, `./sapi/cli/php -v` 출력 `PHP 8.1.34 (cli) (built: Oct 23 2026 ...) (NTS)`.
+- 이 빌드는 확장이 없는 최소 구성입니다. `make test`, 7.4/8.0 브랜치 빌드, 운영 확장 포함 빌드는 하지 않았습니다(미검증). 이 빌드의 버전 번호(8.1.34)만으로는 수정 여부를 알 수 없으므로, 백포트 브랜치의 커밋이 수정을 포함한다는 사실은 PHP 공지에 의존합니다.

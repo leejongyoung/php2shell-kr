@@ -608,7 +608,9 @@ def windows_trust_script(path):
         "$p=" + ps_literal(path) + "; $d=0; try { while ($p) { "
         "$i=Get-Item -LiteralPath $p -Force -ErrorAction Stop; "
         "if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 1 }; "
-        "$a=Get-Acl -LiteralPath $p -ErrorAction Stop; "
+        # Get-Acl 은 최소 환경(PSModulePath 없음)의 Windows PowerShell 에서 Microsoft.PowerShell.Security 를 찾느라 20~30초가 걸려 시간 제한에 걸렸다
+        # (실제 Windows 에서 확인). .NET 의 GetAccessControl() 은 모듈 없이 같은 정보를 바로 준다.
+        "$a=$i.GetAccessControl(); "
         "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; "
         "if ($o -notin @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) { exit 1 }; "
         "$m=if ($d -le 1) { 0xD0156 } else { 0xD0150 }; "
@@ -627,7 +629,7 @@ def trusted_binary(path, stat_fn=os.stat):
     """POSIX root 소유권/권한 검사. stat_fn 주입으로 비특권 테스트 가능."""
     path = os.path.realpath(path)
     if os.name == "nt":
-        code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", windows_trust_script(path)], 20)
+        code, out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", windows_trust_script(path)], 60)
         return code == 0 and out.strip() == "TRUSTED"
     if any(path == p or path.startswith(p + "/") for p in
            ("/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp", "/dev/shm", "/run/user", "/home", "/Users")):

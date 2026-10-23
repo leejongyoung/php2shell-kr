@@ -77,7 +77,11 @@ os.makedirs(BASE)
 show("C:\\")
 show(BASE)
 show(CMD)
-check("System32\\cmd.exe 는 신뢰함(C:\\ 루트의 (AD) 는 무시)", p.trusted_binary(CMD), True, CMD)
+import time
+_t0 = time.time()
+_cmd_trusted = p.trusted_binary(CMD)
+print("정보: System32\\cmd.exe 신뢰 판정 소요 %.1f초" % (time.time() - _t0))
+check("System32\\cmd.exe 는 신뢰함(C:\\ 루트의 (AD) 는 무시)", _cmd_trusted, True, CMD)
 
 # 1) Everyone 이 쓸 수 있는 폴더
 open_dir = os.path.join(BASE, "open")

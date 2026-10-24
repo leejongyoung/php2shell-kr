@@ -2,7 +2,7 @@
 
 실제로 실행해 확인한 것과 확인하지 못한 것을 구분해 적습니다. 숫자는 실행 결과를 그대로 옮긴 것입니다.
 
-- 기준 커밋: 1~4절은 `851bb54`(보안 하드닝 반영 후), 5절의 확장 검증은 `3ae9663`(그 이후 코드 변경은 5절에 적은 도구 결함 수정 6건과 테스트 추가. 이후 커밋은 문서·주석만 바꿈). Windows ACL 판정 수정(5절 결함 표 마지막 행)은 그 뒤 커밋에서 별도로 검증함
+- 기준: 1~4절은 커밋 `851bb54`(보안 하드닝 반영 후), 5절의 확장 검증은 `3ae9663` 이후 변경분을 포함해 1.0.0 릴리스 커밋에서 `ci`·`extended-verification`이 모두 성공한 상태로 다시 확인했습니다(릴리스 노트에 run id). 5절 결함 표의 수정과 테스트 추가 외의 변경은 문서·주석·그림·안내 페이지입니다.
 - 날짜: 2026-10-23, 권고 데이터 기준일 `data/advisory.json`의 `as_of`
 - 주의: 하드닝 이전 커밋의 CI 통과 기록은 이 문서의 근거로 쓰지 않았습니다. 이전 커밋에는 하드닝이 들어 있지 않았고, 하드닝 후 첫 CI(`76d589f`)에서는 4건이 실패해 고쳤습니다.
 
@@ -68,6 +68,7 @@ run `39931232943`, 커밋 `851bb54`: **21개 잡 모두 성공**
 | Homebrew | macOS 26.6.2 arm64 러너, `brew install php`(8.5.11) | Python·sh 판이 Cellar 경로·버전 탐지, `brew info php`, `brew services start php`로 띄운 php-fpm을 `running=true` | `brew_check.sh` |
 | FreeBSD | FreeBSD 14.3 VM, `pkg install php84`(8.4.27) | sh 하네스, Python·sh 판 탐지, 패키지 관리자 `pkg` 인식, `pkg audit -F`, `pkg upgrade -n`, `service php_fpm onestart/restart`, 실행 중 php-fpm 탐지 | `freebsd_check.sh` |
 | Windows ACL (실제 ACL로 `trusted_binary` 판정) | windows-latest | `System32\cmd.exe`와 Administrators/SYSTEM 전용 폴더의 파일은 trusted. 거부: Everyone 쓰기 가능 폴더, 앱 폴더에 Users가 새 파일을 만들 수 있는 경우, 상위 폴더에서 Authenticated Users가 하위 항목을 삭제할 수 있는 경우, 신뢰되지 않는 폴더를 가리키는 정션. 무시: 앱 폴더 위 상위 폴더의 `Authenticated Users:(AD)`(기본 `C:\` 와 같은 권한). 정션은 실제 대상 경로로 풀어 그 경로의 ACL로 판정(신뢰되는 폴더를 가리키면 trusted, POSIX 심볼릭 링크와 같은 동작) | `windows_acl_check.py`, 단위 테스트 `WindowsAclPolicy` |
+| Windows ACL (PowerShell 간이판, 실제 ACL로 `Test-TrustedPath`) | windows-latest, Windows PowerShell 5.1 | Python 판과 같은 정책을 `icacls`로 만든 실제 ACL에서 확인: `cmd.exe` trusted, Everyone 쓰기 폴더 untrusted, Administrators/SYSTEM 전용 폴더 trusted, 앱 폴더에 Users 새 파일 만들기 untrusted → 되돌리면 trusted, 상위 폴더의 `Authenticated Users:(AD)` 무시, `(DC)` untrusted, 정션을 낀 경로는 항상 untrusted(Python 판은 대상 경로로 풀어 판정) | `windows_ps1_acl_check.ps1` |
 | IIS web.config | windows-latest, IIS + URL Rewrite | 병합한 web.config로 multipart POST 403(`{HTTP_CONTENT_TYPE}`·`{CONTENT_TYPE}` 모두 Content-Type 전달), 크기 상한 초과 본문 413, 파일 삭제로 롤백 | `windows_iis_check.ps1` |
 | IIS FastCGI | windows-latest, php-cgi 8.4.27 | IIS가 PHP를 FastCGI로 서빙, 점검 도구가 php-cgi를 `running`으로 탐지, `iisreset /stop` 후 프로세스 없음, `/start` 후 더 늦은 StartTime으로 재기동 | `windows_iis_check.ps1` |
 | 패치 계획(ps1) | windows-latest | 생성된 `patch-plan.ps1`의 증거 단계 실행: 폴더 생성, `processes.csv`·`tcp.csv`·`SHA256.csv`, ACL이 Administrators·SYSTEM만 | `windows_iis_check.ps1` |
@@ -102,6 +103,6 @@ run `39931232943`, 커밋 `851bb54`: **21개 잡 모두 성공**
 - 장시간 부하·실제 공격 트래픽에서의 가상 패치 효과(우회 가능성은 문서에 명시)
 - 이 도구의 판정이 모든 배포판·설정을 포괄한다는 보장. 가상호스트별 `.user.ini`·`.htaccess`·`ini_set()`는 정적으로 알 수 없습니다.
 - 이 검증은 임시 VM·CI 러너에서 한 번 실행한 결과입니다. 서로 다른 OS 버전·설정에서의 재현성은 보장하지 않습니다.
-- `quickcheck/php2shell-quickcheck.ps1`·`.bat`의 `Test-TrustedPath`를 **실제 Windows ACL로** 시험하지는 않았습니다(하네스는 주입한 ACL 값 사용). Python 판의 실제 ACL 판정만 위 표대로 검증했습니다.
+- 신뢰 판정의 정션·링크 처리는 구현마다 다릅니다. Python 판은 실제 경로로 푼 뒤 그 경로의 ACL로 판정하고, PowerShell 간이판(`.ps1`·`.bat`)은 경로에 재해석 지점이 하나라도 있으면 거부합니다. 둘 다 안전한 쪽이며 실제 Windows에서 각각 확인했습니다.
 
 ## 7. 재현

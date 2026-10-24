@@ -36,7 +36,7 @@ import time
 import threading
 from urllib.parse import urlsplit
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"
 TOOL = "php2shell-kr"
 
 # --- 권고 데이터 -----------------------------------------------------------------

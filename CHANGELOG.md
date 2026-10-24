@@ -1,6 +1,24 @@
 # 변경 이력
 
-버전 번호는 0.x 입니다. JSON 출력 필드와 종료 코드(0/1/3)는 아직 호환성을 약속하지 않습니다. 검증한 것과 못한 것은 [docs/verification.ko.md](docs/verification.ko.md) 에 있습니다.
+1.0.0부터 [JSON 출력 공통 필드와 종료 코드(0/1/2/3)](docs/output-format.ko.md)는 1.x 안에서 없애거나 뜻을 바꾸지 않습니다(필드·열거 값 추가는 있을 수 있음). 검증한 것과 못한 것은 [docs/verification.ko.md](docs/verification.ko.md) 에 있습니다.
+
+## 1.0.0 — 2026-10-24
+
+### 호환 약속
+
+- JSON 공통 필드와 종료 코드의 뜻을 [docs/output-format.ko.md](docs/output-format.ko.md) 로 확정했고, 실제 CLI 를 실행하는 계약 테스트(`tests/test_output_contract.py`)로 Python 판과 sh 판이 같은 필드·열거 값·종료 코드를 내는지 확인합니다.
+
+### 추가
+
+- 한국어 안내 페이지(GitHub Pages)와 검색 엔진용 메타데이터(`tools/build_site.py`): 수정 버전은 권고 데이터에서 만들어집니다.
+- `quickcheck/php2shell-quickcheck.ps1`·`.bat` 의 신뢰 판정을 실제 Windows ACL 로 시험(`tests/windows_ps1_acl_check.ps1`): Python 판과 같은 정책이 실제 ACL 에서 동작합니다.
+
+### 1.0.0 에서도 확인하지 못한 것 (알고 쓰세요)
+
+- 안정 기간: 이 도구는 만든 지 며칠 안 됐고 실제 환경 검증은 한두 번 통과한 결과입니다. 간헐 실패가 있었습니다(IIS 설정 반영 시간차).
+- 취약 버전을 수정 버전으로 실제 교체하는 흐름(`brew upgrade`, `pkg upgrade`, `dnf needs-restarting`), Windows 폴더 교체 전체 절차, SELinux/AppArmor, auditd 실제 이벤트 기록.
+- 백포트 브랜치 서명 키가 PHP 릴리스 관리자의 키인지의 독립 확인(커미터의 GitHub 계정 키까지만 확인).
+- 장시간 부하·실제 공격 트래픽에서의 가상 패치 효과, 모든 배포판·설정을 포괄한다는 보장.
 
 ## 0.2.0 — 2026-10-24
 

@@ -13,7 +13,7 @@
 ![Last commit](https://img.shields.io/github/last-commit/leejongyoung/php2shell-kr)
 
 PHP2Shell(**CVE-2026-109618 / CVE-2026-109619**, PHP 엔진의 인증 없는 원격 코드 실행·메모리 노출 취약점) 점검과 대응을
-돕는 **방어용** 도구 모음입니다(도구 이름은 `php2shell-triage`이고, 저장소 이름은 한국어 사용자가 찾기 쉽도록 `php2shell-kr`입니다). Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.
+돕는 **방어용** 도구 모음입니다(도구와 저장소 이름은 모두 `php2shell-kr`입니다). Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.
 
 > **이 저장소에는 익스플로잇이 없습니다.** 공격 코드(PoC)도 받지 않습니다. 인터넷에 도는 `php2shell` 이름의 저장소 중 상당수가
 > 익스플로잇이거나 악성코드입니다(KISA도 출처 불명 PoC 실행을 경고했습니다). 취약 여부는 PoC가 아니라 **버전·프로세스·설정·로그**로 판단합니다.
@@ -33,7 +33,7 @@ PHP2Shell(**CVE-2026-109618 / CVE-2026-109619**, PHP 엔진의 인증 없는 원
 | Linux / Unix / macOS (Python 불필요) | `php2shell-quickcheck.sh` | `sudo sh php2shell-quickcheck.sh` |
 | Windows (Python 불필요, 더블클릭 가능) | `php2shell-quickcheck.bat` | 관리자 권한 명령 프롬프트에서 `php2shell-quickcheck.bat` |
 | Windows PowerShell | `php2shell-quickcheck.ps1` | `powershell -ExecutionPolicy Bypass -File .\php2shell-quickcheck.ps1` |
-| 전체 기능 (Python 3.6+) | `php2shell_triage.py` | `sudo python3 php2shell_triage.py` |
+| 전체 기능 (Python 3.6+) | `php2shell_kr.py` | `sudo python3 php2shell_kr.py` |
 
 릴리스에는 단일 파일들과 `SHA256SUMS` 가 들어 있습니다. **내려받은 뒤 해시를 확인하세요.**
 
@@ -94,7 +94,7 @@ F 가상 패치 · G 노출 축소·서비스 중단 · H 사후 피해 억제·
 
 ## English summary
 
-`php2shell-triage` is a **defensive** toolkit for the PHP2Shell vulnerabilities (CVE-2026-109618 / CVE-2026-109619): a Python 3.6+ tool,
+`php2shell-kr` is a **defensive** toolkit for the PHP2Shell vulnerabilities (CVE-2026-109618 / CVE-2026-109619): a Python 3.6+ tool,
 single-file POSIX `sh` and Windows `.bat`/`.ps1` checkers (no Python needed), generators for **host-specific patch plans** and **virtual-patch**
 (WAF / web server / PHP / OS) configuration, offline (air-gapped) patching guidance, and a Korean incident runbook with contact points.
 It contains **no exploit code**, changes no configuration, makes **no network calls**, only executes binaries it trusts by default, and **never applies patches** — the system administrator stays responsible.

@@ -6,15 +6,15 @@
 
 ## 0. 시작 전
 
-- 점검 도구와 권고 기준일 확인: `python3 php2shell_triage.py --version`, 결과 JSON의 `advisory_source`(경로·sha256).
+- 점검 도구와 권고 기준일 확인: `python3 php2shell_kr.py --version`, 결과 JSON의 `advisory_source`(경로·sha256).
 - 설정 백업(`php.ini`, FPM 풀, Apache/nginx/IIS 설정)과 되돌리는 방법을 정해 둡니다. 되돌리면 다시 취약해지므로 [가상 패치](virtual-patching.ko.md)·노출 축소를 함께 준비합니다.
 - **침해가 의심되면 패치·재시작 전에** [runbook.ko.md](runbook.ko.md)의 순서(격리 → 신고 → 증거 확보 → 조치)를 먼저 따릅니다. 재시작하면 메모리 증거가 사라집니다.
 
 ## 1. 점검
 
 ```sh
-sudo python3 php2shell_triage.py                  # 또는 sudo sh php2shell-quickcheck.sh
-python3 php2shell_triage.py --json > report.json  # 기록용
+sudo python3 php2shell_kr.py                  # 또는 sudo sh php2shell-quickcheck.sh
+python3 php2shell_kr.py --json > report.json  # 기록용
 ```
 
 종료 코드: `0` 조치 필요 없음 · `1` 조치 필요 · `3` 확인 불가(**안전하다는 뜻이 아님**).
@@ -32,8 +32,8 @@ python3 php2shell_triage.py --json > report.json  # 기록용
 도구는 점검 결과로 **권장 순서**를 계산합니다. 시스템에 맞춘 명령은 계획 파일로 받을 수 있습니다.
 
 ```sh
-python3 php2shell_triage.py --emit-patch-plan ./plan --mode online     # 인터넷 가능
-python3 php2shell_triage.py --emit-patch-plan ./plan --mode offline    # 폐쇄망
+python3 php2shell_kr.py --emit-patch-plan ./plan --mode online     # 인터넷 가능
+python3 php2shell_kr.py --emit-patch-plan ./plan --mode offline    # 폐쇄망
 sh php2shell-quickcheck.sh --plan-file ./patch-plan.sh                 # Python 없이
 ```
 

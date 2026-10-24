@@ -44,7 +44,7 @@ docker exec <컨테이너> sh /tmp/q.sh            # 또는 --json
 **정지된 컨테이너 / 이미지** (바이너리를 실행하지 않는 정적 점검, 다른 아키텍처여도 됨):
 ```sh
 docker create --name tmp <이미지> && mkdir rootfs && docker export tmp | tar -x -C rootfs && docker rm tmp
-python3 php2shell_triage.py --root ./rootfs            # 또는 sh php2shell-quickcheck.sh --root ./rootfs
+python3 php2shell_kr.py --root ./rootfs            # 또는 sh php2shell-quickcheck.sh --root ./rootfs
 ```
 `--root` 는 **기본적으로 대상 트리의 바이너리를 호스트에서 실행하지 않습니다**(의심 이미지 대비). 버전은 패키지 정보와 바이너리 안의
 `X-Powered-By: PHP/x.y.z` 문자열로 읽습니다. 신뢰할 수 있는 트리에서만 `--exec` 를 함께 주세요. 실행 중인 프로세스 점검(재시작 필요 여부)은 `--root` 에서는 하지 않습니다.
@@ -52,7 +52,7 @@ python3 php2shell_triage.py --root ./rootfs            # 또는 sh php2shell-qui
 
 ## 5. 배포 묶음 만들기
 ```sh
-python3 tools/build_dist.py            # dist/php2shell-triage-<버전>/ 와 .zip/.tar.gz, SHA256SUMS
+python3 tools/build_dist.py            # dist/php2shell-kr-<버전>/ 와 .zip/.tar.gz, SHA256SUMS
 ```
 `php2shell-quickcheck.bat` 는 PowerShell 스크립트를 내장한 단일 파일입니다(헤더는 ASCII). 환경 변수 `P2S_NOPAUSE=1` 이면 더블클릭 모드의 `pause` 를 건너뜁니다.
 

@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, ROOT)
 
 import build_dist  # noqa: E402
-import php2shell_triage  # noqa: E402
+import php2shell_kr  # noqa: E402
 
 
 class DistBundle(unittest.TestCase):
@@ -25,17 +25,17 @@ class DistBundle(unittest.TestCase):
     def setUpClass(cls):
         cls.out = tempfile.mkdtemp()
         build_dist.main(["--out", cls.out])
-        cls.dir = os.path.join(cls.out, "php2shell-triage-%s" % php2shell_triage.__version__)
+        cls.dir = os.path.join(cls.out, "php2shell-kr-%s" % php2shell_kr.__version__)
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.out, ignore_errors=True)
 
     def test_expected_files_and_archives(self):
-        for name in ("php2shell-quickcheck.sh", "php2shell-quickcheck.bat", "php2shell-quickcheck.ps1", "php2shell_triage.py",
+        for name in ("php2shell-quickcheck.sh", "php2shell-quickcheck.bat", "php2shell-quickcheck.ps1", "php2shell_kr.py",
                      "LICENSE", "NOTICE", "SHA256SUMS", "data/advisory.json", "virtual-patch/README.ko.md"):
             self.assertTrue(os.path.isfile(os.path.join(self.dir, name)), name)
-        base = "php2shell-triage-%s" % php2shell_triage.__version__
+        base = "php2shell-kr-%s" % php2shell_kr.__version__
         self.assertTrue(os.path.isfile(os.path.join(self.out, base + ".zip")))
         self.assertTrue(os.path.isfile(os.path.join(self.out, base + ".tar.gz")))
 

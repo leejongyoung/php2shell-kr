@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Lee Jongyoung
-"""php2shell_triage 단위 테스트 (표준 라이브러리 unittest, Python 3.6+)."""
+"""php2shell_kr 단위 테스트 (표준 라이브러리 unittest, Python 3.6+)."""
 import gzip
 import copy
 import hashlib
@@ -21,9 +21,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-import php2shell_triage as triage  # noqa: E402
+import php2shell_kr as kr  # noqa: E402
 
-ADVISORY = triage.load_advisory()
+ADVISORY = kr.load_advisory()
 POSIX = unittest.skipIf(os.name == "nt", "POSIX 전용 픽스처(셸 스크립트 실행)")
 
 
@@ -45,7 +45,7 @@ class VersionVectors(unittest.TestCase):
         with open(os.path.join(HERE, "vectors", "versions.json"), encoding="utf-8") as handle:
             cases = json.load(handle)["cases"]
         for case in cases:
-            self.assertEqual(triage.classify(case["version"], ADVISORY), case["class"], case["version"])
+            self.assertEqual(kr.classify(case["version"], ADVISORY), case["class"], case["version"])
 
     def test_embedded_advisory_matches_data_file(self):
         code = subprocess.call([sys.executable, os.path.join(ROOT, "tools", "sync_embedded_advisory.py"), "--check"])
@@ -54,7 +54,7 @@ class VersionVectors(unittest.TestCase):
     def test_sync_check_accepts_crlf_checkout(self):
         # Windows autocrlf 체크아웃을 흉내: 소스와 권고 데이터를 CRLF 로 복사해 --check 가 통과해야 한다.
         with tempfile.TemporaryDirectory() as tmp:
-            for rel in ("php2shell_triage.py", os.path.join("tools", "sync_embedded_advisory.py"), os.path.join("data", "advisory.json")):
+            for rel in ("php2shell_kr.py", os.path.join("tools", "sync_embedded_advisory.py"), os.path.join("data", "advisory.json")):
                 os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
                 with open(os.path.join(ROOT, rel), "rb") as handle:
                     data = handle.read().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
@@ -64,21 +64,21 @@ class VersionVectors(unittest.TestCase):
             self.assertEqual(code, 0)
 
     def test_verdict_depends_on_vendor_evidence_only_for_affected_classes(self):
-        self.assertEqual(triage.verdict_for("fixed", "no"), "fixed")
-        self.assertEqual(triage.verdict_for("vulnerable", "yes"), "vendor_patched")
-        self.assertEqual(triage.verdict_for("vulnerable", "unknown"), "vulnerable")
-        self.assertEqual(triage.verdict_for("eol_backport", "yes"), "vendor_patched")
-        self.assertEqual(triage.verdict_for("eol_no_fix", "no"), "vulnerable")
-        self.assertEqual(triage.verdict_for("old_unsupported", "unknown"), "eol")
+        self.assertEqual(kr.verdict_for("fixed", "no"), "fixed")
+        self.assertEqual(kr.verdict_for("vulnerable", "yes"), "vendor_patched")
+        self.assertEqual(kr.verdict_for("vulnerable", "unknown"), "vulnerable")
+        self.assertEqual(kr.verdict_for("eol_backport", "yes"), "vendor_patched")
+        self.assertEqual(kr.verdict_for("eol_no_fix", "no"), "vulnerable")
+        self.assertEqual(kr.verdict_for("old_unsupported", "unknown"), "eol")
 
 
 class VendorEvidence(unittest.TestCase):
     def test_needs_both_cves(self):
         both = "php8.4 (8.4.26-1+deb12u2) stable; urgency=high\n * Fix CVE-2026-109618, CVE-2026-109619\n"
         one = both.replace(", CVE-2026-109619", "")
-        self.assertEqual(triage.has_vendor_evidence(both, ADVISORY), "yes")
-        self.assertEqual(triage.has_vendor_evidence(one, ADVISORY), "no")
-        self.assertEqual(triage.has_vendor_evidence(None, ADVISORY), "unknown")
+        self.assertEqual(kr.has_vendor_evidence(both, ADVISORY), "yes")
+        self.assertEqual(kr.has_vendor_evidence(one, ADVISORY), "no")
+        self.assertEqual(kr.has_vendor_evidence(None, ADVISORY), "unknown")
 
     def test_debian_changelog_is_read_from_root(self):
         with tempfile.TemporaryDirectory() as root:
@@ -86,27 +86,27 @@ class VendorEvidence(unittest.TestCase):
             os.makedirs(os.path.dirname(path))
             with gzip.open(path, "wt", encoding="utf-8") as handle:
                 handle.write("php8.4 (8.4.26-1+deb12u2) bookworm-security; urgency=high\n * CVE-2026-109618 CVE-2026-109619\n")
-            text = triage.vendor_changelog("apt", "php8.4-fpm", root)
-            self.assertEqual(triage.has_vendor_evidence(text, ADVISORY), "yes")
-            self.assertIsNone(triage.vendor_changelog("apt", "php8.3-fpm", root))
+            text = kr.vendor_changelog("apt", "php8.4-fpm", root)
+            self.assertEqual(kr.has_vendor_evidence(text, ADVISORY), "yes")
+            self.assertIsNone(kr.vendor_changelog("apt", "php8.3-fpm", root))
 
 
 class ConfigParsing(unittest.TestCase):
     def test_ini_flags_and_sizes(self):
-        parsed = triage.parse_ini("; c\nsession.upload_progress.enabled = Off\nmemory_limit = 256M ; x\n[PHP]\npost_max_size=8M\n", "php.ini")
+        parsed = kr.parse_ini("; c\nsession.upload_progress.enabled = Off\nmemory_limit = 256M ; x\n[PHP]\npost_max_size=8M\n", "php.ini")
         self.assertEqual(parsed["session.upload_progress.enabled"][0], "0")
         self.assertEqual(parsed["memory_limit"][0], "256M")
-        self.assertEqual(triage.size_bytes("8M"), 8 * 1024 * 1024)
-        self.assertEqual(triage.size_bytes("-1"), -1)
-        self.assertIsNone(triage.size_bytes("lots"))
+        self.assertEqual(kr.size_bytes("8M"), 8 * 1024 * 1024)
+        self.assertEqual(kr.size_bytes("-1"), -1)
+        self.assertIsNone(kr.size_bytes("lots"))
 
     def test_pool_and_apache_admin_flags(self):
-        pool = triage.parse_pool_or_vhost(
+        pool = kr.parse_pool_or_vhost(
             "php_admin_value[memory_limit] = -1\nphp_value[post_max_size] = 8M\n;php_admin_flag[session.auto_start] = off\n", "pool.conf")
         self.assertEqual(pool["memory_limit"], ("-1", "pool.conf", True))
         self.assertFalse(pool["post_max_size"][2])
         self.assertNotIn("session.auto_start", pool)
-        apache = triage.parse_pool_or_vhost("php_admin_flag session.upload_progress.enabled off\n", "a.conf", apache=True)
+        apache = kr.parse_pool_or_vhost("php_admin_flag session.upload_progress.enabled off\n", "a.conf", apache=True)
         self.assertEqual(apache["session.upload_progress.enabled"], ("0", "a.conf", True))
 
     def test_mitigation_status_levels(self):
@@ -115,31 +115,31 @@ class ConfigParsing(unittest.TestCase):
             pool = os.path.join(root, "pool.conf")
             write(ini, "memory_limit = 128M\n")
             write(pool, "")
-            none = triage.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
+            none = kr.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
             self.assertEqual(none["status"], "none")
             write(ini, "session.upload_progress.enabled = 0\n")
-            partial = triage.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
+            partial = kr.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
             self.assertEqual(partial["status"], "partial")
             write(pool, "php_admin_value[memory_limit] = -1\n")
-            full = triage.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
+            full = kr.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
             self.assertEqual(full["status"], "interim")
             # memory_limit=-1 set only in php.ini is not admin-locked -> not counted
             write(pool, "")
             write(ini, "session.upload_progress.enabled = 0\nmemory_limit = -1\n")
-            unlocked = triage.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
+            unlocked = kr.evaluate_config("fpm", "8.4", {"ini": [ini], "pool": [pool]})
             self.assertEqual(unlocked["status"], "partial")
             self.assertTrue(any("고정되지 않아" in note for note in unlocked["notes"]))
             # PHP 8.5 additionally needs fatal_error_backtraces=0
             write(pool, "php_admin_value[memory_limit] = -1\n")
-            self.assertEqual(triage.evaluate_config("fpm", "8.5", {"ini": [ini], "pool": [pool]})["status"], "partial")
+            self.assertEqual(kr.evaluate_config("fpm", "8.5", {"ini": [ini], "pool": [pool]})["status"], "partial")
             write(ini, "session.upload_progress.enabled = 0\nfatal_error_backtraces = 0\n")
-            self.assertEqual(triage.evaluate_config("fpm", "8.5", {"ini": [ini], "pool": [pool]})["status"], "interim")
+            self.assertEqual(kr.evaluate_config("fpm", "8.5", {"ini": [ini], "pool": [pool]})["status"], "interim")
 
 
 @POSIX
 class ScanFixtures(unittest.TestCase):
     def scan_root(self, root, **kwargs):
-        result, info = triage.scan(ADVISORY, root=root, exec_mode="all", **kwargs)
+        result, info = kr.scan(ADVISORY, root=root, exec_mode="all", **kwargs)
         return result, info
 
     def test_vulnerable_and_fixed_binaries_by_exec(self):
@@ -194,7 +194,7 @@ class ScanFixtures(unittest.TestCase):
             def processes():
                 return [{"pid": 9, "exe": link, "deleted": False, "kind": "php", "module": None, "start": None, "unit": None}], False
 
-            result, _ = triage.scan(ADVISORY, root=None, runner_processes=processes, exec_mode="all")
+            result, _ = kr.scan(ADVISORY, root=None, runner_processes=processes, exec_mode="all")
             items = [i for i in result["installations"] if i["path"] == os.path.realpath(real_binary)]
             self.assertEqual(len(items), 1)
             self.assertEqual(items[0]["alias"], link)
@@ -211,14 +211,14 @@ class ScanFixtures(unittest.TestCase):
                 return [{"pid": 4242, "exe": binary, "deleted": False, "kind": "php", "module": None,
                          "start": started, "unit": "php8.4-fpm.service"}], False
 
-            result, _ = triage.scan(ADVISORY, root=None, runner_processes=processes, exec_mode="all")
+            result, _ = kr.scan(ADVISORY, root=None, runner_processes=processes, exec_mode="all")
             item = [i for i in result["installations"] if i["path"] == os.path.realpath(binary)][0]
             self.assertEqual(item["verdict"], "fixed")
             self.assertTrue(item["needs_restart"])
             self.assertEqual(item["units"], ["php8.4-fpm.service"])
             self.assertEqual(result["exit_code"], 1)
             deleted = lambda: ([{"pid": 7, "exe": binary, "deleted": True, "kind": "php", "module": None, "start": None, "unit": None}], False)  # noqa: E731
-            result, _ = triage.scan(ADVISORY, root=None, runner_processes=deleted, exec_mode="all")
+            result, _ = kr.scan(ADVISORY, root=None, runner_processes=deleted, exec_mode="all")
             self.assertTrue([i for i in result["installations"] if i["path"] == os.path.realpath(binary)][0]["needs_restart"])
 
     def test_kernel_threads_do_not_limit_process_visibility(self):
@@ -229,11 +229,11 @@ class ScanFixtures(unittest.TestCase):
             raise FileNotFoundError(2, "no exe link")
 
         def run(pids):
-            with mock.patch.object(triage.os, "listdir", lambda path: pids), \
-                    mock.patch.object(triage.os, "readlink", readlink), \
-                    mock.patch.object(triage, "read_text", lambda *args, **kwargs: None), \
-                    mock.patch.object(triage, "_boot_time", lambda: 0):
-                return triage.linux_processes()[1]
+            with mock.patch.object(kr.os, "listdir", lambda path: pids), \
+                    mock.patch.object(kr.os, "readlink", readlink), \
+                    mock.patch.object(kr, "read_text", lambda *args, **kwargs: None), \
+                    mock.patch.object(kr, "_boot_time", lambda: 0):
+                return kr.linux_processes()[1]
 
         self.assertFalse(run(["2", "4"]))
         self.assertTrue(run(["2", "3", "4"]))
@@ -250,10 +250,10 @@ class ScanFixtures(unittest.TestCase):
                 return 0, listing
             return 0, "p%s\nftxt\nn/opt/homebrew/Cellar/php/8.5.11_1/sbin/php-fpm\n" % cmd[3]
 
-        with mock.patch.object(triage, "run", fake_run), \
-                mock.patch.object(triage, "helper_path", lambda name: "/usr/sbin/" + name if name == "lsof" else None), \
-                mock.patch.object(triage.platform, "system", lambda: "Darwin"):
-            processes, unresolved = triage.ps_processes()
+        with mock.patch.object(kr, "run", fake_run), \
+                mock.patch.object(kr, "helper_path", lambda name: "/usr/sbin/" + name if name == "lsof" else None), \
+                mock.patch.object(kr.platform, "system", lambda: "Darwin"):
+            processes, unresolved = kr.ps_processes()
         self.assertFalse(unresolved)
         self.assertEqual(sorted((p["pid"], p["exe"]) for p in processes),
                          [(5165, "/opt/homebrew/Cellar/php/8.5.11_1/sbin/php-fpm"),
@@ -264,10 +264,10 @@ class ScanFixtures(unittest.TestCase):
         def fake_run(cmd, timeout=6, pass_fds=(), limit=0):
             return (0, " 5165 php-fpm: master process (/etc/php-fpm.conf)\n") if cmd[0] == "ps" else (1, "")
 
-        with mock.patch.object(triage, "run", fake_run), \
-                mock.patch.object(triage, "helper_path", lambda name: None), \
-                mock.patch.object(triage.platform, "system", lambda: "Darwin"):
-            processes, unresolved = triage.ps_processes()
+        with mock.patch.object(kr, "run", fake_run), \
+                mock.patch.object(kr, "helper_path", lambda name: None), \
+                mock.patch.object(kr.platform, "system", lambda: "Darwin"):
+            processes, unresolved = kr.ps_processes()
         self.assertEqual(processes, [])
         self.assertTrue(unresolved)
 
@@ -279,15 +279,15 @@ class ScanFixtures(unittest.TestCase):
             seen["limit"] = limit
             return 0, "".join(" %d /usr/bin/filler-%d\n" % (i, i) for i in range(1, 400)) + " 9999 /usr/local/sbin/php-fpm --nodaemonize\n"
 
-        with mock.patch.object(triage, "run", fake_run):
-            processes, _ = triage.ps_processes()
-        self.assertGreater(seen["limit"], triage.OUTPUT_LIMIT)
+        with mock.patch.object(kr, "run", fake_run):
+            processes, _ = kr.ps_processes()
+        self.assertGreater(seen["limit"], kr.OUTPUT_LIMIT)
         self.assertEqual([p["pid"] for p in processes], [9999])
 
     def test_run_keeps_output_up_to_the_requested_limit(self):
-        default = triage.run(["head", "-c", "20000", "/dev/zero"])[1]
-        larger = triage.run(["head", "-c", "20000", "/dev/zero"], limit=20000)[1]
-        self.assertLessEqual(len(default), triage.OUTPUT_LIMIT)
+        default = kr.run(["head", "-c", "20000", "/dev/zero"])[1]
+        larger = kr.run(["head", "-c", "20000", "/dev/zero"], limit=20000)[1]
+        self.assertLessEqual(len(default), kr.OUTPUT_LIMIT)
         self.assertEqual(len(larger), 20000)
 
 
@@ -306,7 +306,7 @@ class WindowsAclPolicy(unittest.TestCase):
         def reader(path):
             entry = acls.get(path, [])
             return False, (owner or self.TRUSTED_INSTALLER), entry
-        return triage.windows_path_trusted(self.FILE, reader)
+        return kr.windows_path_trusted(self.FILE, reader)
 
     def ace(self, sid, rights, flags=0, kind=0):
         return (kind, flags, rights, sid)
@@ -340,13 +340,13 @@ class WindowsAclPolicy(unittest.TestCase):
 
     def test_untrusted_owner_null_dacl_unknown_ace_links_and_read_errors_are_rejected(self):
         self.assertFalse(self.trusted({}, owner="S-1-5-21-1-2-3-1001"))
-        self.assertFalse(triage.windows_path_trusted(self.FILE, lambda path: (False, self.SYSTEM, None)))       # NULL DACL
+        self.assertFalse(kr.windows_path_trusted(self.FILE, lambda path: (False, self.SYSTEM, None)))       # NULL DACL
         self.assertFalse(self.trusted({self.APP: [self.ace(self.USERS, 0x1, 0, 9)]}))                          # 해석하지 않는 허용 계열 ACE
-        self.assertFalse(triage.windows_path_trusted(self.FILE, lambda path: (path == self.APP, self.SYSTEM, [])))  # 재해석 지점(링크·정션)
+        self.assertFalse(kr.windows_path_trusted(self.FILE, lambda path: (path == self.APP, self.SYSTEM, [])))  # 재해석 지점(링크·정션)
 
         def unreadable(path):
             raise OSError(5, "access denied")
-        self.assertFalse(triage.windows_path_trusted(self.FILE, unreadable))
+        self.assertFalse(kr.windows_path_trusted(self.FILE, unreadable))
 
 class BinaryStringVersion(unittest.TestCase):
     @POSIX
@@ -359,7 +359,7 @@ class BinaryStringVersion(unittest.TestCase):
             with open(path, "wb") as handle:
                 handle.write(payload)
             os.chmod(path, 0o755)
-            result, _ = triage.scan(ADVISORY, root=root, no_exec=True)
+            result, _ = kr.scan(ADVISORY, root=root, no_exec=True)
             item = result["installations"][0]
             self.assertEqual((item["version"], item["verdict"], item["version_source"]), ("8.4.26", "vulnerable", "binary-string"))
             self.assertFalse(os.path.exists(marker))
@@ -374,11 +374,11 @@ class BinaryStringVersion(unittest.TestCase):
             with open(path, "w") as handle:
                 handle.write("#!/bin/sh\ntouch %s\necho 'PHP 8.4.27'\n" % marker)
             os.chmod(path, 0o755)
-            result, _ = triage.scan(ADVISORY, root=root)
+            result, _ = kr.scan(ADVISORY, root=root)
             self.assertFalse(os.path.exists(marker))
             self.assertEqual(result["installations"][0]["verdict"], "unknown")
             self.assertTrue(any("--exec" in note for note in result["installations"][0]["notes"]))
-            triage.scan(ADVISORY, root=root, exec_mode="all")
+            kr.scan(ADVISORY, root=root, exec_mode="all")
             self.assertTrue(os.path.exists(marker))
 
     def test_unreadable_or_stringless_binary_is_unknown(self):
@@ -386,8 +386,8 @@ class BinaryStringVersion(unittest.TestCase):
             path = os.path.join(root, "x")
             with open(path, "wb") as handle:
                 handle.write(b"no version here")
-            self.assertIsNone(triage.binary_version(path))
-            self.assertIsNone(triage.binary_version(os.path.join(root, "missing")))
+            self.assertIsNone(kr.binary_version(path))
+            self.assertIsNone(kr.binary_version(os.path.join(root, "missing")))
 
 
 class Recommendations(unittest.TestCase):
@@ -398,7 +398,7 @@ class Recommendations(unittest.TestCase):
         return base
 
     def order(self, sit, mode="online"):
-        return [option for option, _ in triage.recommend(sit, mode)]
+        return [option for option, _ in kr.recommend(sit, mode)]
 
     def item(self, **kwargs):
         base = {"path": "/usr/bin/php", "version": "8.4.26", "class": "vulnerable", "verdict": "vulnerable", "sapi": "fpm",
@@ -447,7 +447,7 @@ class Recommendations(unittest.TestCase):
         bad = [self.item()]
         info = {"pkg": "apt", "container": False}
         result = {"installations": bad}
-        response = triage.build_response(result, info, ADVISORY, "offline", "no")
+        response = kr.build_response(result, info, ADVISORY, "offline", "no")
         for rec in response["recommended"]:
             self.assertTrue(response["details"][rec["id"]]["steps"], rec["id"])
         self.assertIn("격리", response["evidence_order_ko"])
@@ -460,7 +460,7 @@ class VirtualPatchEmit(unittest.TestCase):
     def test_tokens_are_replaced_and_conditional_files_follow_uploads(self):
         for uploads, post_max, has_block in (("no", "8M", True), ("yes", "32M", False), ("unknown", "8M", False)):
             with tempfile.TemporaryDirectory() as out:
-                written = triage.emit_virtual_patch(out, uploads)
+                written = kr.emit_virtual_patch(out, uploads)
                 self.assertTrue(written)
                 blocked = [p for p in written if "block-multipart" in p]
                 self.assertEqual(bool(blocked), has_block, uploads)
@@ -497,7 +497,7 @@ class PatchPlan(unittest.TestCase):
     def emit(self, result, pkg="apt", mode="online", fmt="auto", container=False):
         out = tempfile.mkdtemp()
         info = {"pkg": pkg, "container": container, "system": "Linux"}
-        return out, triage.emit_patch_plan(out, result, info, ADVISORY, mode, fmt)
+        return out, kr.emit_patch_plan(out, result, info, ADVISORY, mode, fmt)
 
     @POSIX
     def test_plan_is_tailored_to_the_analysed_system(self):
@@ -517,11 +517,11 @@ class PatchPlan(unittest.TestCase):
         out, _ = self.emit(self.result())
         plan = os.path.join(out, "patch-plan.sh")
         self.assertEqual(subprocess.call(["sh", "-n", plan]), 0)
-        env = {k: v for k, v in os.environ.items() if k != triage.PLAN_GUARD_ENV}
+        env = {k: v for k, v in os.environ.items() if k != kr.PLAN_GUARD_ENV}
         self.assertEqual(subprocess.call(["sh", plan], env=env, cwd=out, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
-                         triage.PLAN_GUARD_EXIT)
+                         kr.PLAN_GUARD_EXIT)
         # even when "reviewed", every step asks for confirmation; with no answer nothing runs
-        env[triage.PLAN_GUARD_ENV] = "yes"
+        env[kr.PLAN_GUARD_ENV] = "yes"
         proc = subprocess.run(["sh", plan], env=env, cwd=out, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(proc.returncode, 0)
@@ -570,7 +570,7 @@ class Cli(unittest.TestCase):
     def run_main(self, argv):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            code = triage.main(argv)
+            code = kr.main(argv)
         return code, buffer.getvalue()
 
     def test_list_options_needs_no_scan(self):
@@ -623,19 +623,19 @@ class SecurityRegression(unittest.TestCase):
                 return SimpleNamespace(st_uid=owner if path == changed else 0,
                                        st_mode=mode if path == changed and mode is not None else current_mode)
             return inspect
-        self.assertTrue(triage.trusted_binary(binary, fake_stat()))
+        self.assertTrue(kr.trusted_binary(binary, fake_stat()))
         for changed, owner, mode in ((binary, 1, None), ("/usr/local", 1000, None),
                                      (binary, 0, stat.S_IFREG | 0o777),
                                      ("/usr/local/bin", 0, stat.S_IFDIR | 0o775),
                                      ("/usr", 0, stat.S_IFDIR | 0o1777),
                                      (binary, 0, stat.S_IFIFO | 0o644)):
-            self.assertFalse(triage.trusted_binary(binary, fake_stat(changed, owner, mode)), changed)
+            self.assertFalse(kr.trusted_binary(binary, fake_stat(changed, owner, mode)), changed)
         for path in ("/tmp/php", "/var/tmp/php", "/dev/shm/php", "/run/user/1/php", "/home/x/php", "/Users/x/php"):
-            self.assertFalse(triage.trusted_binary(path, fake_stat()), path)
+            self.assertFalse(kr.trusted_binary(path, fake_stat()), path)
 
     def test_run_scrubs_environment_closes_stdin_and_caps_output(self):
         with mock.patch.dict(os.environ, {"PHP2SHELL_SECRET_TEST": "do-not-leak", "PYTHONPATH": "/untrusted"}):
-            code, output = triage.run([sys.executable, "-c",
+            code, output = kr.run([sys.executable, "-c",
                 "import os,sys; print(os.environ.get('PHP2SHELL_SECRET_TEST','ABSENT')); "
                 "print(os.environ.get('PYTHONPATH','ABSENT')); print(repr(sys.stdin.read())); "
                 "print(os.environ.get('LC_ALL','')); print(os.environ['PATH'])"])
@@ -644,13 +644,13 @@ class SecurityRegression(unittest.TestCase):
         self.assertIn("ABSENT\nABSENT\n''", output)
         self.assertNotIn("do-not-leak", output)
         if os.name != "nt":
-            self.assertIn(triage.SAFE_PATH, output)
+            self.assertIn(kr.SAFE_PATH, output)
             self.assertIn("\nC\n", output)
         else:
-            self.assertEqual(output.splitlines()[-1], os.path.join(triage.windows_systemroot(), "System32"))
-        _, output = triage.run([sys.executable, "-c", "import sys; sys.stdout.write('x'*1000000)"])
+            self.assertEqual(output.splitlines()[-1], os.path.join(kr.windows_systemroot(), "System32"))
+        _, output = kr.run([sys.executable, "-c", "import sys; sys.stdout.write('x'*1000000)"])
         self.assertEqual(len(output.encode("utf-8")), 4096)
-        code, _ = triage.run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.1)
+        code, _ = kr.run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.1)
         self.assertIsNone(code)
 
     @POSIX
@@ -660,25 +660,25 @@ class SecurityRegression(unittest.TestCase):
             marker = os.path.join(directory, "executed")
             write(path, "#!/bin/sh\n# X-Powered-By: PHP/8.4.26\n"
                         "touch '%s'\necho 'PHP 8.4.27'\n" % marker, 0o755)
-            with mock.patch.object(triage, "discover_files", return_value=[path]), \
-                    mock.patch.object(triage, "privileged", return_value=True), \
-                    mock.patch.object(triage, "package_owner", return_value=(None, None)):
-                result, _ = triage.scan(ADVISORY, runner_processes=lambda: ([], False))
+            with mock.patch.object(kr, "discover_files", return_value=[path]), \
+                    mock.patch.object(kr, "privileged", return_value=True), \
+                    mock.patch.object(kr, "package_owner", return_value=(None, None)):
+                result, _ = kr.scan(ADVISORY, runner_processes=lambda: ([], False))
                 self.assertEqual(result["exec_policy"], "trusted-only")
                 item = result["installations"][0]
                 self.assertFalse(item["executed"])
                 self.assertIn("신뢰할 수 없는 위치", item["exec_note"])
                 self.assertEqual(item["verdict"], "vulnerable")
                 self.assertFalse(os.path.exists(marker))
-                with mock.patch.object(triage, "privileged", return_value=False):
-                    result, _ = triage.scan(ADVISORY, runner_processes=lambda: ([], False))
+                with mock.patch.object(kr, "privileged", return_value=False):
+                    result, _ = kr.scan(ADVISORY, runner_processes=lambda: ([], False))
                 self.assertTrue(result["installations"][0]["executed"])
                 self.assertEqual(result["exec_policy"], "all")
                 self.assertTrue(os.path.exists(marker))
             os.unlink(marker)
-            with mock.patch.object(triage, "discover_files", return_value=[path]), \
-                    mock.patch.object(triage, "package_owner", return_value=(None, None)):
-                triage.scan(ADVISORY, no_exec=True, exec_mode="all", runner_processes=lambda: ([], False))
+            with mock.patch.object(kr, "discover_files", return_value=[path]), \
+                    mock.patch.object(kr, "package_owner", return_value=(None, None)):
+                kr.scan(ADVISORY, no_exec=True, exec_mode="all", runner_processes=lambda: ([], False))
             self.assertFalse(os.path.exists(marker))
 
     @POSIX
@@ -690,12 +690,12 @@ class SecurityRegression(unittest.TestCase):
             alias_dir = os.path.join(directory, "alias")
             os.symlink(real_dir, alias_dir)
             alias = os.path.join(alias_dir, "php")
-            with mock.patch.object(triage, "discover_files", return_value=[alias]), \
-                    mock.patch.object(triage, "privileged", return_value=True), \
-                    mock.patch.object(triage, "trusted_binary", return_value=True) as trusted, \
-                    mock.patch.object(triage, "exec_version", return_value="8.4.27") as execute, \
-                    mock.patch.object(triage, "package_owner", return_value=(None, None)):
-                result, _ = triage.scan(ADVISORY, runner_processes=lambda: ([], False))
+            with mock.patch.object(kr, "discover_files", return_value=[alias]), \
+                    mock.patch.object(kr, "privileged", return_value=True), \
+                    mock.patch.object(kr, "trusted_binary", return_value=True) as trusted, \
+                    mock.patch.object(kr, "exec_version", return_value="8.4.27") as execute, \
+                    mock.patch.object(kr, "package_owner", return_value=(None, None)):
+                result, _ = kr.scan(ADVISORY, runner_processes=lambda: ([], False))
             canonical = os.path.realpath(path)
             trusted.assert_called_once_with(canonical)
             execute.assert_called_once_with(canonical, "cli", None)
@@ -705,11 +705,11 @@ class SecurityRegression(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             write(os.path.join(root, "usr/bin/php"), "X-Powered-By: PHP/8.4.27")
             write(os.path.join(root, "usr/bin/php8"), "unknown")
-            result, _ = triage.scan(ADVISORY, root=root)
+            result, _ = kr.scan(ADVISORY, root=root)
             self.assertEqual(result["summary"]["fixed"], 1)
             self.assertEqual(result["summary"]["unknown"], 1)
             self.assertEqual(result["exit_code"], 3)
-            self.assertNotIn("조치가 필요한 설치는 없습니다", triage.render_text(result, None, ADVISORY))
+            self.assertNotIn("조치가 필요한 설치는 없습니다", kr.render_text(result, None, ADVISORY))
 
     @POSIX
     def test_root_escapes_nonregular_files_and_oversize_files_are_absent(self):
@@ -722,91 +722,91 @@ class SecurityRegression(unittest.TestCase):
             os.symlink("../../../" + os.path.relpath(escaped, os.path.dirname(root)),
                        os.path.join(directory, "php8"))
             os.mkfifo(os.path.join(directory, "php7"))
-            self.assertIsNone(triage.binary_version(os.path.join(directory, "php7")))
-            self.assertIsNone(triage.read_text(os.path.join(directory, "php7")))
-            result, _ = triage.scan(ADVISORY, root=root, exec_mode="all")
+            self.assertIsNone(kr.binary_version(os.path.join(directory, "php7")))
+            self.assertIsNone(kr.read_text(os.path.join(directory, "php7")))
+            result, _ = kr.scan(ADVISORY, root=root, exec_mode="all")
             self.assertEqual(result["installations"], [])
             self.assertTrue(result["notes"])
-            self.assertIsNone(triage.binary_version(os.path.join(directory, "php"), root=root))
+            self.assertIsNone(kr.binary_version(os.path.join(directory, "php"), root=root))
             # An intermediate directory link is rejected before glob can traverse it.
             os.symlink(outside, os.path.join(root, "opt"))
-            self.assertEqual(triage.safe_glob(root, "/opt/php*"), [])
+            self.assertEqual(kr.safe_glob(root, "/opt/php*"), [])
             local = os.path.join(directory, "php9")
             write(local, "X-Powered-By: PHP/8.4.27")
             os.symlink("php9", os.path.join(directory, "php5"))
-            self.assertEqual(triage.binary_version(os.path.join(directory, "php5"), root=root), "8.4.27")
-            self.assertIsNone(triage.binary_version(local, limit=4, root=root))
-            self.assertIsNone(triage.read_text(local, limit=4, root=root))
-            self.assertIsNone(triage.read_text(directory))
+            self.assertEqual(kr.binary_version(os.path.join(directory, "php5"), root=root), "8.4.27")
+            self.assertIsNone(kr.binary_version(local, limit=4, root=root))
+            self.assertIsNone(kr.read_text(local, limit=4, root=root))
+            self.assertIsNone(kr.read_text(directory))
 
     def test_vendor_mentions_must_be_inside_one_entry_and_evidence_is_printed(self):
         ids = "CVE-2026-109618 CVE-2026-109619"
         header = "php8.4 (8.4.26-1) stable-security; urgency=high\n"
         text = header + " * Fix " + ids + "\n -- Maintainer  Thu, 22 Oct 2026\n"
-        self.assertEqual(triage.has_vendor_evidence(ids, ADVISORY), "no")
-        self.assertEqual(triage.has_vendor_evidence(text, ADVISORY), "yes")
-        self.assertEqual(triage.has_vendor_evidence(header + " * not yet fixed " + ids, ADVISORY), "no")
-        self.assertEqual(triage.has_vendor_evidence(
+        self.assertEqual(kr.has_vendor_evidence(ids, ADVISORY), "no")
+        self.assertEqual(kr.has_vendor_evidence(text, ADVISORY), "yes")
+        self.assertEqual(kr.has_vendor_evidence(header + " * not yet fixed " + ids, ADVISORY), "no")
+        self.assertEqual(kr.has_vendor_evidence(
             header + " * CVE-2026-109618\n" + header + " * CVE-2026-109619\n", ADVISORY), "no")
         rpm = "* Thu Oct 22 2026 Maintainer - 8.4.26-2\n- Fix " + ids
-        self.assertEqual(triage.has_vendor_evidence(rpm, ADVISORY), "yes")
+        self.assertEqual(kr.has_vendor_evidence(rpm, ADVISORY), "yes")
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "php")
             write(path, "X-Powered-By: PHP/8.4.26")
-            with mock.patch.object(triage, "discover_files", return_value=[path]), \
-                    mock.patch.object(triage, "package_owner", return_value=("php8.4-cli", "8.4.26-1")), \
-                    mock.patch.object(triage, "vendor_changelog", return_value=text):
-                result, _ = triage.scan(ADVISORY, exec_mode="never", runner_processes=lambda: ([], False))
+            with mock.patch.object(kr, "discover_files", return_value=[path]), \
+                    mock.patch.object(kr, "package_owner", return_value=("php8.4-cli", "8.4.26-1")), \
+                    mock.patch.object(kr, "vendor_changelog", return_value=text):
+                result, _ = kr.scan(ADVISORY, exec_mode="never", runner_processes=lambda: ([], False))
             self.assertEqual(result["installations"][0]["verdict"], "vendor_patched")
-            self.assertIn("Fix " + ids, triage.render_text(result, None, ADVISORY))
-            self.assertIn("Fix " + ids, triage.render_markdown(result, None, ADVISORY))
+            self.assertIn("Fix " + ids, kr.render_text(result, None, ADVISORY))
+            self.assertIn("Fix " + ids, kr.render_markdown(result, None, ADVISORY))
 
     def test_advisory_shape_and_hostile_values_are_rejected_and_source_is_hashed(self):
         for field, value in (("as_of", "2026-10-23\nid"), ("as_of", "2026;id"), ("extra", "x")):
-            data = copy.deepcopy(triage.EMBEDDED_ADVISORY)
+            data = copy.deepcopy(kr.EMBEDDED_ADVISORY)
             data[field] = value
             with self.assertRaises(ValueError):
-                triage.validate_advisory(data)
+                kr.validate_advisory(data)
         for mutate in (lambda d: d["cves"].__setitem__(0, "CVE-x"),
                        lambda d: d["fixed_releases"].__setitem__("8.4", "8.4.27;id"),
                        lambda d: d["sources"][0].__setitem__("url", "https://example.org/\x1b[2J"),
                        lambda d: d["sources"][0].__setitem__("url", "file:///tmp/x")):
-            data = copy.deepcopy(triage.EMBEDDED_ADVISORY)
+            data = copy.deepcopy(kr.EMBEDDED_ADVISORY)
             mutate(data)
             with self.assertRaises(ValueError):
-                triage.validate_advisory(data)
+                kr.validate_advisory(data)
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, "advisory.json")
-            raw = json.dumps(triage.EMBEDDED_ADVISORY, ensure_ascii=False).encode("utf-8")
+            raw = json.dumps(kr.EMBEDDED_ADVISORY, ensure_ascii=False).encode("utf-8")
             with open(path, "wb") as handle:
                 handle.write(raw)
-            advisory = triage.load_advisory(path)
-            result, _ = triage.scan(advisory, root=root)
+            advisory = kr.load_advisory(path)
+            result, _ = kr.scan(advisory, root=root)
             self.assertEqual(result["advisory_source"]["path"], path)
             digest = hashlib.sha256(raw).hexdigest()
             self.assertEqual(result["advisory_source"]["sha256"], digest)
-            text = triage.render_text(result, None, advisory)
+            text = kr.render_text(result, None, advisory)
             self.assertIn(digest, text)
             self.assertIn("사용자 지정", text)
-            with mock.patch.object(triage.os.path, "lexists", return_value=False):
-                embedded = triage.load_advisory()
+            with mock.patch.object(kr.os.path, "lexists", return_value=False):
+                embedded = kr.load_advisory()
             self.assertTrue(embedded.source["path"].startswith("embedded:"))
             self.assertEqual(len(embedded.source["sha256"]), 64)
 
     def test_parsed_lines_are_capped(self):
         text = "x" * 4096 + "session.upload_progress.enabled=0"
-        self.assertEqual(triage.parse_ini(text, "hostile"), {})
-        self.assertEqual(triage.parse_pool_or_vhost(text, "hostile"), {})
-        self.assertIsNone(triage.parse_version("x" * 4096 + "8.4.27"))
+        self.assertEqual(kr.parse_ini(text, "hostile"), {})
+        self.assertEqual(kr.parse_pool_or_vhost(text, "hostile"), {})
+        self.assertIsNone(kr.parse_version("x" * 4096 + "8.4.27"))
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, "text")
             write(path, "x" * 10000)
-            self.assertEqual(len(triage.read_text(path)), 4096)
+            self.assertEqual(len(kr.read_text(path)), 4096)
             compressed = os.path.join(root, "usr/share/doc/php/changelog.gz")
             os.makedirs(os.path.dirname(compressed))
             with gzip.open(compressed, "wb") as handle:
                 handle.write(b"x" * 2000001)
-            self.assertIsNone(triage.vendor_changelog("apt", "php", root))
+            self.assertIsNone(kr.vendor_changelog("apt", "php", root))
 
 
 class SafeOutputRegression(unittest.TestCase):
@@ -814,21 +814,21 @@ class SafeOutputRegression(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = os.path.join(root, "report")
             args = ["--root", root, "--no-response", "--output", output]
-            self.assertEqual(triage.main(args), 0)
-            self.assertEqual(triage.main(args), 2)
-            self.assertEqual(triage.main(args + ["--force"]), 0)
+            self.assertEqual(kr.main(args), 0)
+            self.assertEqual(kr.main(args), 2)
+            self.assertEqual(kr.main(args + ["--force"]), 0)
             result = PatchPlan().result()
             info = {"pkg": "apt", "container": False}
             plans = os.path.join(root, "plans")
-            paths = triage.emit_patch_plan(plans, result, info, ADVISORY)
+            paths = kr.emit_patch_plan(plans, result, info, ADVISORY)
             with self.assertRaises(FileExistsError):
-                triage.emit_patch_plan(plans, result, info, ADVISORY)
-            triage.emit_patch_plan(plans, result, info, ADVISORY, force=True)
+                kr.emit_patch_plan(plans, result, info, ADVISORY)
+            kr.emit_patch_plan(plans, result, info, ADVISORY, force=True)
             templates = os.path.join(root, "templates")
-            triage.emit_virtual_patch(templates, "yes")
+            kr.emit_virtual_patch(templates, "yes")
             with self.assertRaises(FileExistsError):
-                triage.emit_virtual_patch(templates, "yes")
-            triage.emit_virtual_patch(templates, "yes", force=True)
+                kr.emit_virtual_patch(templates, "yes")
+            kr.emit_virtual_patch(templates, "yes", force=True)
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(os.stat(output).st_mode), 0o600)
                 self.assertEqual(stat.S_IMODE(os.stat(plans).st_mode), 0o700)
@@ -844,24 +844,24 @@ class SafeOutputRegression(unittest.TestCase):
             os.symlink(target, link)
             for force in (False, True):
                 with self.assertRaises(FileExistsError):
-                    triage.safe_write(link, "bad", force=force)
-                self.assertEqual(triage.main(["--root", root, "--output", link] + (["--force"] if force else [])), 2)
+                    kr.safe_write(link, "bad", force=force)
+                self.assertEqual(kr.main(["--root", root, "--output", link] + (["--force"] if force else [])), 2)
             plans = os.path.join(root, "plans")
             os.mkdir(plans)
             os.symlink(target, os.path.join(plans, "patch-plan.md"))
             with self.assertRaises(FileExistsError):
-                triage.emit_patch_plan(plans, PatchPlan().result(), {"pkg": "apt"}, ADVISORY, force=True)
+                kr.emit_patch_plan(plans, PatchPlan().result(), {"pkg": "apt"}, ADVISORY, force=True)
             templates = os.path.join(root, "templates")
             os.mkdir(templates)
             os.symlink(root, os.path.join(templates, "apache"))
             with self.assertRaises(OSError):
-                triage.emit_virtual_patch(templates, "yes", force=True)
+                kr.emit_virtual_patch(templates, "yes", force=True)
             os.unlink(link)
             os.symlink(os.path.join(root, "missing"), link)
             with self.assertRaises(FileExistsError):
-                triage.safe_write(link, "bad", force=True)
+                kr.safe_write(link, "bad", force=True)
             self.assertFalse(os.path.exists(os.path.join(root, "missing")))
-            self.assertEqual(triage.read_text(target), "keep")
+            self.assertEqual(kr.read_text(target), "keep")
 
     def test_hostile_data_cannot_forge_output_or_escape_plan_guards_and_literals(self):
         hostile = "/tmp/a\nFORGED\x1b[2J\r\u0085\u2028\u2029'’‘‚‛;|`/php"
@@ -870,30 +870,30 @@ class SafeOutputRegression(unittest.TestCase):
                       summary={"vulnerable": 1, "eol": 0, "fixed": 0, "vendor_patched": 0, "unknown": 0, "needs_restart": 0})
         result["host"] = "host\nBAD\x1b[2J"
         info = {"pkg": "apt", "container": False}
-        steps = triage.build_patch_plan(result, info, ADVISORY)
-        shell = triage.render_plan_sh(steps, result, ADVISORY)
+        steps = kr.build_patch_plan(result, info, ADVISORY)
+        shell = kr.render_plan_sh(steps, result, ADVISORY)
         self.assertEqual(shell.splitlines()[1], 'if [ "${PHP2SHELL_I_REVIEWED:-}" != "yes" ]; then')
         self.assertNotIn("restart 'php;id.service'", shell)
         self.assertNotIn(hostile, shell)
         self.assertNotIn("\nFORGED", shell)
         self.assertLess(shell.index("if confirm"), shell.index("패키지 관리자가 소유하지 않은"))
         self.assertLess(shell.index("umask 077"), shell.index('mkdir -m 700 "$EV"'))
-        for text in (shell, triage.render_text(result, None, ADVISORY),
-                     triage.render_markdown(result, None, ADVISORY), triage.render_plan_md(steps, result, ADVISORY)):
+        for text in (shell, kr.render_text(result, None, ADVISORY),
+                     kr.render_markdown(result, None, ADVISORY), kr.render_plan_md(steps, result, ADVISORY)):
             for control in ("\x1b", "\r", "\u0085", "\u2028", "\u2029"):
                 self.assertNotIn(control, text)
             self.assertNotIn("\nFORGED", text)
-        markdown = triage.render_markdown(result, None, ADVISORY)
+        markdown = kr.render_markdown(result, None, ADVISORY)
         self.assertIn("&#124;", markdown)
         self.assertIn("&#96;", markdown)
         windows_path = "C:\\php'’‘‚‛;evil\\php.exe"
         result["installations"][0]["path"] = windows_path
-        windows_steps = triage.build_patch_plan(result, {"pkg": "windows"}, ADVISORY)
-        ps1 = triage.render_plan_ps1(windows_steps, result, ADVISORY)
+        windows_steps = kr.build_patch_plan(result, {"pkg": "windows"}, ADVISORY)
+        ps1 = kr.render_plan_ps1(windows_steps, result, ADVISORY)
         self.assertTrue(ps1.startswith("if ($env:PHP2SHELL_I_REVIEWED"))
         for quote in "'’‘‚‛":
-            self.assertIn(quote * 2, triage.ps_literal(windows_path))
-        self.assertIn("-LiteralPath " + triage.ps_literal("C:\\php'’‘‚‛;evil"), ps1)
+            self.assertIn(quote * 2, kr.ps_literal(windows_path))
+        self.assertIn("-LiteralPath " + kr.ps_literal("C:\\php'’‘‚‛;evil"), ps1)
         self.assertLess(ps1.index("if (Confirm-Step"), ps1.index("Copy-Item"))
         self.assertIn("/inheritance:r /grant:r", ps1)
         self.assertNotIn(windows_path, ps1)

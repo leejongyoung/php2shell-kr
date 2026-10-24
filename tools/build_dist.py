@@ -4,13 +4,13 @@
 
   python3 tools/build_dist.py [--out dist]
 
-만들어지는 것 (dist/php2shell-triage-<버전>/):
+만들어지는 것 (dist/php2shell-kr-<버전>/):
   php2shell-quickcheck.sh    Linux/Unix/macOS 용, Python 없이 동작 (POSIX sh, 단일 파일)
   php2shell-quickcheck.bat   Windows 용 단일 파일 (PowerShell 스크립트를 내장한 배치 파일, 더블클릭 가능)
   php2shell-quickcheck.ps1   Windows PowerShell 용 (위 .bat 가 내장한 것과 같은 내용)
-  php2shell_triage.py        Python 3.6+ 용 전체 기능판 (+ data/, virtual-patch/, docs/)
+  php2shell_kr.py        Python 3.6+ 용 전체 기능판 (+ data/, virtual-patch/, docs/)
   SHA256SUMS                 모든 파일의 SHA-256
-  + php2shell-triage-<버전>.zip / .tar.gz
+  + php2shell-kr-<버전>.zip / .tar.gz
 """
 import argparse
 import hashlib
@@ -22,13 +22,13 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import php2shell_triage  # noqa: E402
+import php2shell_kr  # noqa: E402
 
 MARKER = "#PS1-PAYLOAD-BEGIN"
 
 # 헤더는 반드시 ASCII 입니다 (cmd.exe 가 코드 페이지와 무관하게 읽을 수 있도록). 한글은 PowerShell 페이로드 안에만 있습니다.
 BAT_HEADER = r"""@echo off
-rem php2shell-triage for Windows. Does not change server configuration or packages.
+rem php2shell-kr for Windows. Does not change server configuration or packages.
 rem Runs trusted PHP binaries with -n -v by default. Use -NoExec on suspect hosts; -Exec forces execution.
 rem Usage: php2shell-quickcheck.bat [-Json] [-NoExec] [-Exec] [-Offline] [-Root dir] [-PlanFile new.ps1] [-Help]
 rem Exit codes: 0 nothing to do / 1 action required / 3 inconclusive / 2 launcher error
@@ -90,15 +90,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", default=os.path.join(ROOT, "dist"))
     args = parser.parse_args(argv)
-    version = php2shell_triage.__version__
-    name = "php2shell-triage-%s" % version
+    version = php2shell_kr.__version__
+    name = "php2shell-kr-%s" % version
     target = os.path.join(args.out, name)
     if os.path.isdir(target):
         shutil.rmtree(target)
     os.makedirs(target)
     required = [("quickcheck/php2shell-quickcheck.sh", "php2shell-quickcheck.sh"),
                 ("quickcheck/php2shell-quickcheck.ps1", "php2shell-quickcheck.ps1"),
-                ("php2shell_triage.py", "php2shell_triage.py"), ("LICENSE", "LICENSE"), ("NOTICE", "NOTICE"),
+                ("php2shell_kr.py", "php2shell_kr.py"), ("LICENSE", "LICENSE"), ("NOTICE", "NOTICE"),
                 ("README.md", "README.md")]
     for src, dst in required:
         path = os.path.join(ROOT, src)

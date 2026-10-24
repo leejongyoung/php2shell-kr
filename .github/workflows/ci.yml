@@ -128,7 +128,7 @@ jobs:
         env:
           P2S_NOPAUSE: "1"
         run: |
-          $bat = (Resolve-Path dist\php2shell-triage-*\php2shell-quickcheck.bat).Path
+          $bat = (Resolve-Path dist\php2shell-kr-*\php2shell-quickcheck.bat).Path
           $json = & cmd.exe /c "`"$bat`" -Json"
           $code = $LASTEXITCODE
           Write-Host $json
@@ -143,7 +143,7 @@ jobs:
       - name: python tool agrees
         shell: pwsh
         run: |
-          $json = python php2shell_triage.py --json --no-response
+          $json = python php2shell_kr.py --json --no-response
           $data = ($json -join "`n") | ConvertFrom-Json
           $vuln = @($data.installations | Where-Object { $_.path -like 'C:\php-vulnerable*' -and $_.verdict -eq 'vulnerable' })
           $fixed = @($data.installations | Where-Object { $_.path -like 'C:\php-fixed*' -and $_.verdict -eq 'fixed' })
@@ -152,7 +152,7 @@ jobs:
       - name: patch plan for Windows is generated and parses
         shell: pwsh
         run: |
-          python php2shell_triage.py --no-response --emit-patch-plan plan --plan-format ps1 | Out-Null
+          python php2shell_kr.py --no-response --emit-patch-plan plan --plan-format ps1 | Out-Null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path plan\patch-plan.ps1).Path, [ref]$null, [ref]$errors) | Out-Null
           if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_.Message }; throw "generated plan has syntax errors" }
@@ -173,7 +173,7 @@ jobs:
           python-version: "3.13"
       - run: python tools/build_dist.py --out dist
       - name: verify checksums
-        run: cd dist/php2shell-triage-*/ && sha256sum -c SHA256SUMS
+        run: cd dist/php2shell-kr-*/ && sha256sum -c SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Lee Jongyoung
-"""data/advisory.json 내용을 php2shell_triage.py 의 내장 권고 데이터 블록에 반영한다.
+"""data/advisory.json 내용을 php2shell_kr.py 의 내장 권고 데이터 블록에 반영한다.
 
 사용: python3 tools/sync_embedded_advisory.py --force  (기존 소스를 안전하게 교체)
       python3 tools/sync_embedded_advisory.py --check  (어긋나면 종료 코드 1)
@@ -13,16 +13,16 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOL = os.path.join(ROOT, "php2shell_triage.py")
+TOOL = os.path.join(ROOT, "php2shell_kr.py")
 DATA = os.path.join(ROOT, "data", "advisory.json")
 BEGIN, END = "# BEGIN EMBEDDED ADVISORY\n", "# END EMBEDDED ADVISORY\n"
 sys.path.insert(0, ROOT)
-import php2shell_triage as triage
+import php2shell_kr as kr
 QUOTE3 = "'" * 3
 
 
 def render():
-    data = triage.load_advisory(DATA)
+    data = kr.load_advisory(DATA)
     text = json.dumps(data, ensure_ascii=False, indent=1)
     if QUOTE3 in text or "\\" in text:
         raise SystemExit("advisory.json 에 세 개의 작은따옴표나 역슬래시가 있어 내장할 수 없습니다.")
@@ -30,7 +30,7 @@ def render():
 
 
 def main(argv):
-    raw = triage.read_bytes(TOOL, 2000000)
+    raw = kr.read_bytes(TOOL, 2000000)
     if raw is None:
         raise SystemExit("소스를 읽을 수 없습니다.")
     # Windows 체크아웃(autocrlf)은 CRLF 일 수 있다: 비교는 LF 로 정규화하고, 쓸 때 원래 줄바꿈을 유지한다.
@@ -47,7 +47,7 @@ def main(argv):
     if "--force" not in argv:
         print("기존 소스 교체에는 --force가 필요합니다.", file=sys.stderr)
         return 2
-    triage.safe_write(TOOL, new.replace("\n", "\r\n") if crlf else new, force=True, script=True)
+    kr.safe_write(TOOL, new.replace("\n", "\r\n") if crlf else new, force=True, script=True)
     return 0
 
 

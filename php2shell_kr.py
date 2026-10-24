@@ -2,16 +2,16 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Lee Jongyoung
-"""php2shell-triage: PHP2Shell(CVE-2026-109618 / CVE-2026-109619) 로컬 점검 도구.
+"""php2shell-kr: PHP2Shell(CVE-2026-109618 / CVE-2026-109619) 로컬 점검 도구.
 
 이 도구는 방어용입니다. 익스플로잇을 포함하지 않고 서버 설정·패키지를 바꾸지 않습니다.
 신뢰할 수 있는 PHP 바이너리만 `-n -v` 로 실행합니다(--no-exec 로 끌 수 있음).
 네트워크로 아무것도 보내지 않습니다. 조치는 명령으로 '출력'만 합니다.
 
-  python3 php2shell_triage.py                 # 이 서버의 PHP를 찾아 판정과 조치 계획 출력
-  python3 php2shell_triage.py --json          # 기계가 읽는 JSON
-  python3 php2shell_triage.py --no-exec       # 발견한 바이너리를 실행하지 않음(침해 의심 서버)
-  python3 php2shell_triage.py --root /mnt/img # 마운트한 파일시스템을 오프라인으로 점검
+  python3 php2shell_kr.py                 # 이 서버의 PHP를 찾아 판정과 조치 계획 출력
+  python3 php2shell_kr.py --json          # 기계가 읽는 JSON
+  python3 php2shell_kr.py --no-exec       # 발견한 바이너리를 실행하지 않음(침해 의심 서버)
+  python3 php2shell_kr.py --root /mnt/img # 마운트한 파일시스템을 오프라인으로 점검
 
 종료 코드: 0 조치 필요 없음 / 1 취약·EOL·재시작 필요 설치가 있음 / 3 확인 불가(권한 등).
 표준 라이브러리만 사용하며 Python 3.6 이상에서 동작합니다.
@@ -37,7 +37,7 @@ import threading
 from urllib.parse import urlsplit
 
 __version__ = "0.1.0"
-TOOL = "php2shell-triage"
+TOOL = "php2shell-kr"
 
 # --- 권고 데이터 -----------------------------------------------------------------
 # data/advisory.json 이 있으면 그것을 우선 쓰고(최신 데이터로 교체 가능), 없으면 아래 내장본을 씁니다.
@@ -1580,7 +1580,7 @@ def option_detail(option, sit, info, advisory, webservers):
                           "제조사 현황 확인처: KISA 보호나라 보안공지, NCSC-NL 소프트웨어 목록(https://github.com/NCSC-NL/php2shell)"]}
     if option == "virtual-patch":
         detected = ", ".join(webservers) if webservers else "감지 못함"
-        return {"steps": ["감지된 웹서버: %s. 이 서버용 설정 파일을 만들려면: python3 php2shell_triage.py --emit-virtual-patch ./virtual-patch-out --uploads yes|no" % detected,
+        return {"steps": ["감지된 웹서버: %s. 이 서버용 설정 파일을 만들려면: python3 php2shell_kr.py --emit-virtual-patch ./virtual-patch-out --uploads yes|no" % detected,
                           "계층: 요청 크기·필드 수 제한 / `PHP_SESSION_UPLOAD_PROGRESS` 표지·깊은 중첩·빈 filename 대량 multipart 차단(WAF) / php_admin_* 설정 / cgroup 메모리 상한 / (업로드가 없으면) multipart 차단",
                           "ModSecurity 는 DetectionOnly 로 먼저 적용해 오탐을 확인한 뒤 차단으로 전환",
                           "한계: PHP 는 '완전한 완화책은 없다'고 밝혔습니다. 문자셋 변형·RFC 2231/5987 인코딩 등으로 우회될 수 있으니 패치 전까지의 시간 벌기로만 쓰세요.",
@@ -1976,7 +1976,7 @@ def build_patch_plan(result, info, advisory, mode="online"):
             verify.append("rpm -q --changelog %s | grep -m2 -E 'CVE-2026-1096(18|19)' || echo '변경 이력에 CVE 없음: 수정 버전인지 확인 필요'" % shlex.quote(name))
     if before:
         verify.append(before.replace("php-before.txt", "php-after.txt") + " ; diff \"$WORK/php-before.txt\" \"$WORK/php-after.txt\" || true")
-    verify += ["python3 php2shell_triage.py   # 또는 php2shell-quickcheck.sh — 판정이 '수정됨', 재시작 필요 없음이어야 합니다",
+    verify += ["python3 php2shell_kr.py   # 또는 php2shell-quickcheck.sh — 판정이 '수정됨', 재시작 필요 없음이어야 합니다",
                "# 주의: `php -v` 로만 확인하지 마세요 (CLI 와 웹 SAPI 가 다를 수 있음)"]
     steps.append({"title": "적용 확인", "notes": ["배포판 패키지는 버전 번호가 그대로여도 패치됐을 수 있으니 변경 이력에서 %s 를 확인합니다." % cves], "commands": verify})
     steps.append({"title": "사후 조치 (안내)", "notes": [
@@ -1992,7 +1992,7 @@ def render_plan_sh(steps, result, advisory):
              "    echo '자동 실행용이 아닙니다. PHP2SHELL_I_REVIEWED=yes 필요.' >&2",
              "    exit %d" % PLAN_GUARD_EXIT,
              "fi",
-             "# php2shell-triage 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" %
+             "# php2shell-kr 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" %
              (clean(result["host"]), clean(result["platform"]), clean(advisory["as_of"])),
              "# 자동 패치가 아닙니다. 각 명령을 검토하고 직접 실행하며 책임은 관리자에게 있습니다.",
              "set -u",
@@ -2013,7 +2013,7 @@ def render_plan_ps1(steps, result, advisory):
              "    Write-Host '자동 실행용이 아닙니다. PHP2SHELL_I_REVIEWED=yes 필요.'",
              "    exit %d" % PLAN_GUARD_EXIT,
              "}",
-             "# php2shell-triage 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" %
+             "# php2shell-kr 맞춤 패치 계획 — %s (%s), 권고 기준일 %s" %
              (clean(result["host"]), clean(result["platform"]), clean(advisory["as_of"])),
              "# 자동 패치가 아닙니다. 각 명령을 검토하고 직접 실행하며 책임은 관리자에게 있습니다.",
              "function Confirm-Step([string]$Message) { $a = Read-Host \"$Message [y/N]\"; return ($a -match '^(y|yes)$') }", ""]
@@ -2059,7 +2059,7 @@ def emit_patch_plan(out_dir, result, info, advisory, mode="online", fmt="auto", 
 
 # --- CLI -------------------------------------------------------------------------
 def build_parser():
-    parser = argparse.ArgumentParser(prog="php2shell_triage.py", description=__doc__.split("\n\n")[0],
+    parser = argparse.ArgumentParser(prog="php2shell_kr.py", description=__doc__.split("\n\n")[0],
                                      epilog="서버 설정·패키지를 바꾸지 않습니다. 기본: 신뢰할 수 있는 PHP 바이너리만 -n -v 로 실행합니다. 의심되는 호스트에서는 --no-exec.")
     parser.add_argument("--json", action="store_true", help="JSON 출력")
     parser.add_argument("--format", choices=("text", "json", "md"), help="출력 형식 (기본 text)")

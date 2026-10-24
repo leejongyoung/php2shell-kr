@@ -17,6 +17,6 @@ PHP 자체의 취약점 신고는 PHP 프로젝트로, 한국 내 침해사고 �
 최신 릴리스만 지원합니다. 권고 데이터(`data/advisory.json`)는 상황에 따라 자주 바뀌므로 사용 전에 `as_of` 날짜를 확인하세요.
 
 ## English summary
-This is a defensive triage and response toolkit for the PHP2Shell vulnerabilities. It contains no exploit code and accepts none.
+This is a defensive check and response toolkit for the PHP2Shell vulnerabilities. It contains no exploit code and accepts none.
 The tools are read-only, make no network calls, and never apply patches (the system administrator remains responsible).
 Report security issues in this repository privately through GitHub's "Report a vulnerability" feature, not as public issues.

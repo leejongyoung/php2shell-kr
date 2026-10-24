@@ -90,7 +90,7 @@ Check (Test-Path 'C:\Windows\System32\inetsrv\config\applicationHost.config') 'a
 # ---------------------------------------------------------------- 1) web.config virtual patch
 Write-Host '== IIS web.config virtual patch'
 $out = Join-Path $env:TEMP ('p2s-vp-' + [guid]::NewGuid().ToString('N'))
-python "$Repo\php2shell_triage.py" --emit-virtual-patch $out --uploads no 2>&1 | Out-Null
+python "$Repo\php2shell_kr.py" --emit-virtual-patch $out --uploads no 2>&1 | Out-Null
 $rule = [xml](Get-Content (Join-Path $out 'iis\web.config.block-multipart.xml') -Raw -Encoding UTF8)
 $snip = [xml](Get-Content (Join-Path $out 'iis\web.config.snippet.xml') -Raw -Encoding UTF8)
 $merged = [xml]'<?xml version="1.0" encoding="utf-8"?><configuration><system.webServer/></configuration>'
@@ -147,7 +147,7 @@ if (Test-Path $phpCgi) {
 
     $row = @()
     foreach ($attempt in 1..3) {
-        $json = python "$Repo\php2shell_triage.py" --json --no-response | Out-String
+        $json = python "$Repo\php2shell_kr.py" --json --no-response | Out-String
         $data = $json | ConvertFrom-Json
         $row = @($data.installations | Where-Object { $_.path -like "$PhpDir*php-cgi.exe" -and $_.running })
         if ($row.Count -ge 1) { break }
@@ -176,7 +176,7 @@ if (Test-Path $phpCgi) {
 # ---------------------------------------------------------------- 3) patch plan evidence step
 Write-Host '== patch-plan.ps1 evidence step'
 $planDir = Join-Path $env:TEMP ('p2s-plan-' + [guid]::NewGuid().ToString('N'))
-python "$Repo\php2shell_triage.py" --emit-patch-plan $planDir --no-response 2>&1 | Out-Null
+python "$Repo\php2shell_kr.py" --emit-patch-plan $planDir --no-response 2>&1 | Out-Null
 $plan = Join-Path $planDir 'patch-plan.ps1'
 Check (Test-Path $plan) 'patch-plan.ps1 generated'
 if (Test-Path $plan) {
@@ -214,7 +214,7 @@ function Check-Utf8File([string]$Path, [string]$Label) {
 $tmp949 = Join-Path $env:TEMP 'p2s-cp949'
 New-Item -ItemType Directory -Force $tmp949 | Out-Null
 $py949 = Join-Path $tmp949 'py.txt'
-& cmd.exe /c "chcp 949 >nul & python `"$Repo\php2shell_triage.py`" --no-response > `"$py949`" 2>&1"
+& cmd.exe /c "chcp 949 >nul & python `"$Repo\php2shell_kr.py`" --no-response > `"$py949`" 2>&1"
 Check-Utf8File $py949 'python tool'
 python "$Repo\tools\build_dist.py" --out (Join-Path $tmp949 'dist') 2>&1 | Out-Null
 $bat = (Get-ChildItem (Join-Path $tmp949 'dist') -Recurse -Filter 'php2shell-quickcheck.bat' | Select-Object -First 1).FullName

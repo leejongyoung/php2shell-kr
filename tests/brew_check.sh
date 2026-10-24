@@ -22,7 +22,7 @@ BREWVER="$(brew list --versions php | awk '{print $2}' | sed 's/_.*//')"
 echo "brew php 버전: $BREWVER ($(sw_vers -productVersion), $(uname -m))"
 if brew info php 2>&1 | grep -q "$BREWVER"; then pass "brew info php 가 설치 버전 $BREWVER 를 보여 줌"; else fail "brew info php 에 설치 버전이 없음"; fi
 
-PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+PYJSON="$(python3 "$ROOT/php2shell_kr.py" --json --no-response 2>/dev/null)"
 SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
 if echo "$PYJSON" | $INSPECT --path '/(Cellar|opt)/php[^/]*/[^"]*bin/php$' --version "$BREWVER"; then pass "python 판이 Homebrew php $BREWVER 를 찾음"; else fail "python 판이 Homebrew php $BREWVER 를 찾지 못함"; fi
 if echo "$SHJSON" | $INSPECT --path '/(Cellar|opt)/php[^/]*/[^"]*bin/php$' --version "$BREWVER"; then pass "sh 판이 Homebrew php $BREWVER 를 찾음"; else fail "sh 판이 Homebrew php $BREWVER 를 찾지 못함"; fi
@@ -38,7 +38,7 @@ else
   sleep 3
 fi
 SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
-PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+PYJSON="$(python3 "$ROOT/php2shell_kr.py" --json --no-response 2>/dev/null)"
 if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "sh 판이 실행 중인 php-fpm 을 running=true 로 찾음"; else fail "sh 판이 실행 중인 php-fpm 을 찾지 못함"; fi
 if echo "$PYJSON" | $INSPECT --sapi fpm --running; then pass "python 판이 실행 중인 php-fpm 을 running=true 로 찾음"; else fail "python 판이 실행 중인 php-fpm 을 찾지 못함"; fi
 exit "$FAIL"

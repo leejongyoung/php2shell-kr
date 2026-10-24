@@ -37,7 +37,7 @@ def rows(data):
 @unittest.skipUnless(shutil.which("sh") and os.name == "posix", "POSIX sh 필요")
 class PythonAndShellAgree(unittest.TestCase):
     def run_both(self, root, *extra):
-        py = subprocess.run([sys.executable, os.path.join(ROOT, "php2shell_triage.py"), "--root", root, "--exec", "--json", "--no-response"] + list(extra),
+        py = subprocess.run([sys.executable, os.path.join(ROOT, "php2shell_kr.py"), "--root", root, "--exec", "--json", "--no-response"] + list(extra),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         sh = subprocess.run(["sh", os.path.join(ROOT, "quickcheck", "php2shell-quickcheck.sh"), "--root", root, "--exec", "--json"] + list(extra),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)

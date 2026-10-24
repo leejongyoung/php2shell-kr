@@ -20,7 +20,7 @@ echo "pkg php84 버전: $PKGVER"
 
 INSPECT="python3 $ROOT/tests/_inspect_json.py"
 SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
-PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+PYJSON="$(python3 "$ROOT/php2shell_kr.py" --json --no-response 2>/dev/null)"
 if echo "$SHJSON" | $INSPECT --path '^/usr/local/(bin/php|sbin/php-fpm)$' --version "$PKGVER"; then pass "sh 판이 pkg php84 $PKGVER 를 찾음"; else fail "sh 판이 php84 $PKGVER 를 찾지 못함"; fi
 if echo "$PYJSON" | $INSPECT --path '^/usr/local/(bin/php|sbin/php-fpm)$' --version "$PKGVER"; then pass "python 판이 pkg php84 $PKGVER 를 찾음"; else fail "python 판이 php84 $PKGVER 를 찾지 못함"; fi
 if echo "$PYJSON" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["package_manager"] == "pkg" else 1)'; then pass "python 판이 패키지 관리자를 pkg 로 인식함"; else fail "python 판이 패키지 관리자를 pkg 로 인식하지 못함"; fi
@@ -36,7 +36,7 @@ if service php_fpm onestart >/tmp/fpm-start.out 2>&1 || service php_fpm start >>
   echo "--- service 출력"; cat /tmp/fpm-start.out; service php_fpm onestatus; sockstat -l 2>/dev/null | grep -i php
   SHJSON="$(sh "$ROOT/quickcheck/php2shell-quickcheck.sh" --json 2>/dev/null)"
   if echo "$SHJSON" | $INSPECT --sapi fpm --running; then pass "실행 중인 php-fpm 을 running=true 로 찾음"; else fail "실행 중인 php-fpm 을 찾지 못함"; fi
-  PYJSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+  PYJSON="$(python3 "$ROOT/php2shell_kr.py" --json --no-response 2>/dev/null)"
   if echo "$PYJSON" | $INSPECT --sapi fpm --running; then pass "python 판이 실행 중인 php-fpm 을 running=true 로 찾음"; else fail "python 판이 실행 중인 php-fpm 을 찾지 못함"; fi
   if service php_fpm restart >/tmp/fpm-restart.out 2>&1; then pass "service php_fpm restart 동작"; else fail "service php_fpm restart"; cat /tmp/fpm-restart.out; fi
   service php_fpm stop >/dev/null 2>&1

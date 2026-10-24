@@ -7,7 +7,7 @@
   python3 tests/platform_matrix.py --list
   python3 tests/platform_matrix.py --registry docker.io/library   # 기본은 mirror.gcr.io/library (Docker Hub 429 회피)
 
-각 시나리오는 컨테이너 안에서 `php2shell_triage.py`(Python 전체판)와 `quickcheck/php2shell-quickcheck.sh`(sh 간이판)를
+각 시나리오는 컨테이너 안에서 `php2shell_kr.py`(Python 전체판)와 `quickcheck/php2shell-quickcheck.sh`(sh 간이판)를
 모두 실행해 판정이 기대와 같고 두 구현이 서로 일치하는지 본다. 저장소는 읽기 전용으로 마운트하며 호스트는 바꾸지 않는다.
 익스플로잇은 쓰지 않는다: 점검은 버전·프로세스·설정만 읽는다.
 기본 실행 정책(auto)은 root 소유 /usr/local/bin/php만 실행하며 --exec-mode never/all 로 새 플래그도 확인할 수 있다.
@@ -21,7 +21,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import php2shell_triage as triage  # noqa: E402
+import php2shell_kr as kr  # noqa: E402
 
 APT_PY = "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq python3 >/dev/null 2>&1"
 APK_PY = "apk add --no-cache python3 >/dev/null 2>&1"
@@ -68,7 +68,7 @@ def run_scenario(scenario, registry, exec_mode="auto"):
     flags = {"auto": "", "never": "--no-exec", "all": "--exec"}[exec_mode]
     script = (
         "set -u; %s; %s; sleep 2; "
-        "echo ==PY==; python3 /repo/php2shell_triage.py --json --no-response %s; echo ==PYRC=$?; "
+        "echo ==PY==; python3 /repo/php2shell_kr.py --json --no-response %s; echo ==PYRC=$?; "
         "echo ==SH==; sh /repo/quickcheck/php2shell-quickcheck.sh --json %s; echo ==SHRC=$?"
     ) % (scenario["setup"], scenario["start"], flags, flags)
     started = time.time()
@@ -103,11 +103,11 @@ def run_scenario(scenario, registry, exec_mode="auto"):
         problems.append("--no-exec 에서 바이너리 실행됨")
     rows = [(os.path.basename(i["path"]), i["version"], i["verdict"], i["class"], i["vendor_patch"], i["running"], i["needs_restart"])
             for i in py["installations"]]
-    advisory = triage.load_advisory()
+    advisory = kr.load_advisory()
     for item in py["installations"]:  # 불변식: 판정은 분류와 벤더 근거에서 정해진다
-        if item["verdict"] != triage.verdict_for(item["class"], item["vendor_patch"]):
+        if item["verdict"] != kr.verdict_for(item["class"], item["vendor_patch"]):
             problems.append("판정 불변식 위반: %s" % item["path"])
-        if item["version"] and item["class"] != triage.classify(item["version"], advisory):
+        if item["version"] and item["class"] != kr.classify(item["version"], advisory):
             problems.append("분류 불일치: %s" % item["path"])
     py_set = sorted((os.path.basename(i["path"]), i["version"], i["class"]) for i in py["installations"])
     sh_set = sorted((os.path.basename(i["path"]), i["version"], i["class"]) for i in sh["installations"])
@@ -166,7 +166,7 @@ def main(argv=None):
         for row in result.get("rows", []):
             print("        %-14s %-22s %-14s class=%s vendor=%s running=%s restart=%s" % row, flush=True)
     if args.json:
-        triage.safe_write(args.json, json.dumps(results, ensure_ascii=False, indent=2) + "\n", force=args.force)
+        kr.safe_write(args.json, json.dumps(results, ensure_ascii=False, indent=2) + "\n", force=args.force)
     failed = [r for r in results if r["status"] in ("FAIL", "ERROR")]
     print("\n통과 %d / 정보 %d / 실패 %d" % (sum(r["status"] == "PASS" for r in results), sum(r["status"] == "INFO" for r in results), len(failed)))
     return 1 if failed else 0

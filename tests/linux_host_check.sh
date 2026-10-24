@@ -54,7 +54,7 @@ case "$EXE_LINK" in
     cp -p "$BIN" "$BIN.new" && mv "$BIN.new" "$BIN" ;;
 esac
 INSPECT="python3 $ROOT/tests/_inspect_json.py"
-JSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+JSON="$(python3 "$ROOT/php2shell_kr.py" --json --no-response 2>/dev/null)"
 if echo "$JSON" | $INSPECT --sapi fpm --running --needs-restart; then
   pass "패키지 파일 교체 후 도구가 재시작 필요를 보고"
 else
@@ -65,7 +65,7 @@ case "$(echo "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["
   full) pass "root 실행에서 process_visibility=full" ;; *) fail "root 실행인데 process_visibility 가 full 이 아님" ;;
 esac
 systemctl restart "$UNIT"
-JSON="$(python3 "$ROOT/php2shell_triage.py" --json --no-response 2>/dev/null)"
+JSON="$(python3 "$ROOT/php2shell_kr.py" --json --no-response 2>/dev/null)"
 if echo "$JSON" | $INSPECT --no-needs-restart; then
   pass "systemctl restart 후 재시작 필요가 사라짐"
 else

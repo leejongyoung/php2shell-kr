@@ -1,5 +1,10 @@
 # php2shell-kr: PHP2Shell 취약점 점검·대응 도구 (한국어)
 
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="방패 무늬를 단 픽셀아트 코끼리와 서버 타워" width="496">
+</p>
+<p align="center"><sub>그림은 이 저장소를 위해 직접 그린 오리지널 픽셀아트입니다(<code>tools/build_art.py</code>로 생성). 픽셀아트 느낌만 비슷할 뿐 다른 사이트의 그림·도트 데이터·색상표·코드를 쓰지 않았습니다.</sub></p>
+
 ![CI](https://github.com/leejongyoung/php2shell-kr/actions/workflows/ci.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/leejongyoung/php2shell-kr?include_prereleases&sort=semver)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)

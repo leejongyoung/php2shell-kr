@@ -3,7 +3,6 @@
 <p align="center">
   <img src="docs/assets/banner.svg" alt="보라색 픽셀아트 코끼리가 코로 서버의 전원 버튼을 눌러 불을 하나씩 끄고 잠드는 애니메이션" width="448">
 </p>
-<p align="center"><sub>그림은 이 저장소를 위해 직접 그린 오리지널 픽셀아트입니다(<code>tools/build_art.py</code>로 생성, 움직임 줄이기 설정에서는 정지 화면). 픽셀아트 느낌만 비슷할 뿐 다른 사이트의 그림·도트 데이터·색상표·코드를 쓰지 않았습니다.</sub></p>
 
 ![CI](https://github.com/leejongyoung/php2shell-kr/actions/workflows/ci.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/leejongyoung/php2shell-kr?include_prereleases&sort=semver)

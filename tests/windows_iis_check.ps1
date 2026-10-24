@@ -36,6 +36,13 @@ function Wait-Post([string]$Url, [scriptblock]$MakeContent, [int]$Expected, [int
         Start-Sleep -Milliseconds 500
     } while ($watch.Elapsed.TotalSeconds -lt $Seconds)
     Write-Host ("  status {0} after {1:N1}s (expected {2})" -f $code, $watch.Elapsed.TotalSeconds, $Expected)
+    if ($code -eq 500) {
+        try {
+            $page = Invoke-WebRequest $Url -Method Get -SkipHttpErrorCheck -UseBasicParsing
+            $text = ([regex]::Replace([string]$page.Content, '<[^>]+>', ' ') -replace '\s+', ' ')
+            Write-Host ("  IIS error page: " + $text.Substring(0, [Math]::Min(700, $text.Length)))
+        } catch { Write-Host "  could not read the IIS error page: $($_.Exception.Message)" }
+    }
     return $code
 }
 # IIS applies handler/config changes asynchronously: the first request right after `appcmd` or `iisreset /start` can still be a static-file 404.17
@@ -61,9 +68,20 @@ function Form-Content([int]$Bytes) {
 # ---------------------------------------------------------------- IIS install
 Write-Host '== install IIS + URL Rewrite'
 Install-WindowsFeature -Name Web-Server, Web-CGI, Web-Mgmt-Tools | Out-Null
-choco install urlrewrite -y --no-progress | Out-Null
+# The URL Rewrite module is a separate package. A transient download failure used to be hidden (Out-Null) and showed up later as HTTP 500
+# for every web.config with <rewrite>. Retry, keep the output, and verify the module file exists.
+$rewriteDll = Join-Path $env:SystemRoot 'System32\inetsrv\rewrite.dll'
+foreach ($try in 1..3) {
+    if (Test-Path $rewriteDll) { break }
+    $chocoOut = choco install urlrewrite -y --no-progress --force 2>&1 | Out-String
+    Write-Host ("choco install urlrewrite attempt {0}: exit {1}, rewrite.dll present: {2}" -f $try, $LASTEXITCODE, (Test-Path $rewriteDll))
+    if (-not (Test-Path $rewriteDll)) { Write-Host $chocoOut; Start-Sleep -Seconds (5 * $try) }
+}
 $global:LASTEXITCODE = 0
+Check (Test-Path $rewriteDll) 'URL Rewrite module (rewrite.dll) is installed'
 Start-Service W3SVC
+& "$env:SystemRoot\System32\iisreset.exe" /restart | Out-Null   # make sure the freshly installed module is loaded
+$global:LASTEXITCODE = 0
 $appcmd = Join-Path $env:SystemRoot 'System32\inetsrv\appcmd.exe'
 $wwwroot = 'C:\inetpub\wwwroot'
 if (-not (Test-Path (Join-Path $wwwroot 'iisstart.htm'))) { Set-Content (Join-Path $wwwroot 'iisstart.htm') 'iis' }

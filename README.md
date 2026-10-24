@@ -1,8 +1,8 @@
-# php2shell-kr: PHP2Shell 취약점 점검·대응 도구 (한국어)
-
 <p align="center">
   <img src="docs/assets/banner.svg" alt="보라색 픽셀아트 코끼리가 코로 서버의 전원 버튼을 눌러 불을 하나씩 끄고 잠드는 애니메이션" width="448">
 </p>
+
+<h1 align="center">php2shell-kr: PHP2Shell 취약점 점검·대응 도구 (한국어)</h1>
 
 ![CI](https://github.com/leejongyoung/php2shell-kr/actions/workflows/ci.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/leejongyoung/php2shell-kr?include_prereleases&sort=semver)

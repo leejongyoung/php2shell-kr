@@ -37,8 +37,8 @@ def make_root(version):
 
 def run(command, root, *extra):
     result = subprocess.run([sys.executable if command == PY else "sh", command, "--root", root, "--json"] + list(extra),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    return result.returncode, json.loads(result.stdout)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return result.returncode, json.loads(result.stdout.decode("utf-8"))      # 도구는 항상 UTF-8 로 출력한다(콘솔 코드 페이지와 무관)
 
 
 class OutputContract(unittest.TestCase):
@@ -81,11 +81,12 @@ class OutputContract(unittest.TestCase):
             existing.write("keep")
         self.addCleanup(os.unlink, existing.name)
         result = subprocess.run([sys.executable, PY, "--root", root, "--output", existing.name], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, universal_newlines=True)
+                                stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 2)
         with open(existing.name) as handle:
             self.assertEqual(handle.read(), "keep")
 
+    @POSIX
     def test_summary_counts_match_installations(self):
         root = make_root("8.4.26")
         self.addCleanup(shutil.rmtree, root, True)

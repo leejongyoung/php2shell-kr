@@ -9,3 +9,4 @@ php2shell-evidence-*/
 php2shell-work-*/
 patch-plan.*
 *.local.json
+_site/

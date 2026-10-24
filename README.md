@@ -13,7 +13,8 @@
 ![Last commit](https://img.shields.io/github/last-commit/leejongyoung/php2shell-kr)
 
 PHP2Shell(**CVE-2026-109618 / CVE-2026-109619**, PHP 엔진의 인증 없는 원격 코드 실행·메모리 노출 취약점) 점검과 대응을
-돕는 **방어용** 도구 모음입니다(도구와 저장소 이름은 모두 `php2shell-kr`입니다). Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.
+돕는 **방어용** 도구 모음입니다(도구와 저장소 이름은 모두 `php2shell-kr`입니다). PHP2Shell 취약점 점검, 패치 방법, 가상 패치, 사고 대응(KISA 대응 수칙 기준)을 한국어로 정리했고 Linux·Unix·macOS·Windows·컨테이너에서 쓸 수 있습니다.
+안내 페이지: https://leejongyoung.github.io/php2shell-kr/ · [출력 형식과 종료 코드](docs/output-format.ko.md)
 
 > **이 저장소에는 익스플로잇이 없습니다.** 공격 코드(PoC)도 받지 않습니다. 인터넷에 도는 `php2shell` 이름의 저장소 중 상당수가
 > 익스플로잇이거나 악성코드입니다(KISA도 출처 불명 PoC 실행을 경고했습니다). 취약 여부는 PoC가 아니라 **버전·프로세스·설정·로그**로 판단합니다.

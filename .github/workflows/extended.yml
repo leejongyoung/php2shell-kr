@@ -116,6 +116,9 @@ jobs:
           Expand-Archive fixed.zip -DestinationPath C:\php-fixed
       - name: real ACL trust decisions
         run: python tests/windows_acl_check.py
+      - name: real ACL trust decisions (quickcheck.ps1 / .bat, Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/windows_ps1_acl_check.ps1
       - name: IIS web.config, FastCGI, patch plan, cp949
         shell: pwsh
         run: ./tests/windows_iis_check.ps1

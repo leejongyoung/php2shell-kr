@@ -88,7 +88,7 @@ F 가상 패치 · G 노출 축소·서비스 중단 · H 사후 피해 억제·
 
 ## 기여 · 보안 · 라이선스
 
-[CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · 라이선스: [Apache License 2.0](LICENSE) (`NOTICE` 참고)
+[CHANGELOG.md](CHANGELOG.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · 라이선스: [Apache License 2.0](LICENSE) (`NOTICE` 참고)
 
 ---
 

@@ -33,11 +33,28 @@ class DistBundle(unittest.TestCase):
 
     def test_expected_files_and_archives(self):
         for name in ("php2shell-quickcheck.sh", "php2shell-quickcheck.bat", "php2shell-quickcheck.ps1", "php2shell_kr.py",
-                     "LICENSE", "NOTICE", "SHA256SUMS", "data/advisory.json", "virtual-patch/README.ko.md"):
+                     "LICENSE", "NOTICE", "SHA256SUMS", "data/advisory.json", "virtual-patch/README.ko.md",
+                     "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"):
             self.assertTrue(os.path.isfile(os.path.join(self.dir, name)), name)
         base = "php2shell-kr-%s" % php2shell_kr.__version__
         self.assertTrue(os.path.isfile(os.path.join(self.out, base + ".zip")))
         self.assertTrue(os.path.isfile(os.path.join(self.out, base + ".tar.gz")))
+
+    def test_readme_relative_links_resolve_inside_the_bundle(self):
+        import re
+        with open(os.path.join(self.dir, "README.md"), encoding="utf-8") as handle:
+            text = handle.read()
+        links = [m.group(1).split("#")[0] for m in re.finditer(r"\]\(([^)\s]+)\)", text)]
+        relative = sorted({l for l in links if l and not re.match(r"^[a-z][a-z0-9+.-]*:", l, re.I)})
+        self.assertIn("SECURITY.md", relative)
+        missing = [l for l in relative if not os.path.exists(os.path.join(self.dir, l))]
+        self.assertEqual(missing, [], "README 의 상대 링크 대상이 배포 묶음에 없습니다")
+
+    def test_policy_docs_are_listed_in_sha256sums(self):
+        with open(os.path.join(self.dir, "SHA256SUMS"), encoding="utf-8") as handle:
+            listed = {line.partition("  ")[2].strip() for line in handle if line.strip()}
+        for name in ("CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"):
+            self.assertIn(name, listed)
 
     def test_checksums_match_every_file(self):
         with open(os.path.join(self.dir, "SHA256SUMS"), encoding="utf-8") as handle:

@@ -99,7 +99,10 @@ def main(argv=None):
     required = [("quickcheck/php2shell-quickcheck.sh", "php2shell-quickcheck.sh"),
                 ("quickcheck/php2shell-quickcheck.ps1", "php2shell-quickcheck.ps1"),
                 ("php2shell_kr.py", "php2shell_kr.py"), ("LICENSE", "LICENSE"), ("NOTICE", "NOTICE"),
-                ("README.md", "README.md")]
+                ("README.md", "README.md"),
+                # README 가 상대 링크로 참조하는 문서: 오프라인(폐쇄망) 반입 묶음에서도 열려야 한다.
+                ("CHANGELOG.md", "CHANGELOG.md"), ("CONTRIBUTING.md", "CONTRIBUTING.md"),
+                ("SECURITY.md", "SECURITY.md")]
     for src, dst in required:
         path = os.path.join(ROOT, src)
         if not os.path.isfile(path):
